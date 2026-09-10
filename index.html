@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.8.0">
+<meta name="app-version" content="0.9.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -450,16 +450,17 @@ const MARKET_RATES = {
    拠点マップ(3D ワールド)
    ========================================================= */
 // マップ寸法・配置(ワールド座標。TILE=1なので1ユニット=1マス)
-// v0.8.0: 拠点と森を1枚の連続マップに統合(マップ切替の演出は廃止し、扉の開閉のみ残す)。
-// 「行動マップ」は拠点ゾーンを5x5マスに設定。木材伐採エリア(森)は扉の先に直結する。
+// v0.9.0: 拠点ゾーンを7x7に拡大。木材売買カウンターは西側に設置(初期のレイアウトに近い形)。
+// 木材伐採エリア(森)は扉の先に直結する連続マップ。
 const TILE = 1;                         // 1マスのサイズ
-const BASE_MIN = -2, BASE_MAX = 2;      // 拠点ゾーン(5x5マス)
+const BASE_MIN = -3, BASE_MAX = 3;      // 拠点ゾーン(7x7マス)
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
-const DOOR_Z = BASE_MAX + 1;            // 門の位置(z=3、拠点のすぐ南)
-const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(=4)
-const FOREST_MAX_Z = 10;                // 森ゾーンの南端(木を9本、等間隔に配置)
+const DOOR_Z = BASE_MAX + 1;            // 門の位置(拠点のすぐ南)
+const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z
+const FOREST_MAX_Z = FOREST_MIN_Z + 6;  // 森ゾーンの南端(木を9本、等間隔に配置)
 const WORLD_MIN_X = BASE_MIN, WORLD_MAX_X = BASE_MAX; // 森も拠点と同じ幅を使う
 const STEP_DURATION = 0.14;             // 1マス移動にかける時間(秒)
+const WORKER_STEP_DURATION = 0.18;      // 雇用NPCが1マス移動するのにかける時間(秒)
 const INTERACT_RADIUS = 1.1;            // 隣接マス(距離1)から操作できるように
 const HARVEST_RADIUS = 1.1;
 const HARVEST_SECONDS_BASE = 3;         // 木に近づいてから木材化するまでの時間(効率化で短縮)
@@ -489,17 +490,22 @@ function woodPerTree(){ return WOOD_PER_TREE_BASE + state.upgrades.amount; }
 function harvestSeconds(){ return Math.max(1, HARVEST_SECONDS_BASE - state.upgrades.speed*0.4); }
 function tradeRewardGold(){ return TRADE_REWARD_GOLD_BASE + state.upgrades.price; }
 
-// 拠点ゾーンの固定オブジェクト(すべて整数マス)
-const WOOD_COUNTER_PT = { x:-2, z:-2 }; // 木材売買カウンター
-const DEPOSIT_PT       = { x:-2, z:-1 }; // 木材を置くポイント(カウンターの南隣)
-const TRADE_PT         = { x:-1, z:-2 }; // 売買するポイント(カウンターの東隣)
-const NPC_COUNTER_PT   = { x:2,  z:-2 }; // NPCカウンター(伐採NPC・売買NPCを統一して雇用)
-const EFF_COUNTER_PT   = { x:2,  z:0 };  // 効率化カウンター
-const PLAYER_SPAWN     = { x:0,  z:1 };  // プレイヤーの初期位置
+// 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
+const WOOD_COUNTER_X   = BASE_MIN - 1;   // 木材売買カウンターのx(西の柵の位置)
+const DEPOSIT_PT       = { x:BASE_MIN, z:-1 }; // 木材を置くポイント(カウンターのすぐ東=拠点内側)
+const TRADE_PT         = { x:BASE_MIN, z: 1 }; // 売買するポイント(カウンターのすぐ東=拠点内側)
+const NPC_COUNTER_PT   = { x:BASE_MAX-1, z:-2 }; // NPCエリア(伐採NPC・売買NPCを統一して雇用、床のみ・通行可)
+const EFF_COUNTER_PT   = { x:BASE_MAX-1, z: 2 }; // 効率化エリア(床のみ・通行可)
+const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
+
+// 客NPCの待機エリア(拠点の外、西側。土の広場・7x7)
+const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
+const PLAZA_MIN_X = PLAZA_MAX_X - 6;
+const PLAZA_MIN_Z = -3, PLAZA_MAX_Z = 3;
 
 // 森ゾーン: 木を9本、等間隔(3×3)に配置
 const TREE_DEFS = [];
-for(const tz of [5,7,9]){
+for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5]){
   for(const tx of [-2,0,2]){
     TREE_DEFS.push({ x:tx, z:tz });
   }
@@ -521,23 +527,12 @@ let modalSelIndex = 0;      // モーダル内の選択インデックス(矢印
 function distTo(x,z,px,pz){ const dx=x-px, dz=z-pz; return Math.sqrt(dx*dx+dz*dz); }
 function inDoorGap(x){ return x >= DOOR_FROM && x <= DOOR_TO; }
 
-// 拠点ゾーン・扉・森ゾーンを1つの連続したマップとして判定する
+// 拠点ゾーン・扉・森ゾーンを1つの連続したマップとして判定する。
+// NPCエリア・効率化エリアは床のみ(通行可)、木もすり抜けられるので、境界の判定だけでよい
 function blocked(x,z){
-  if(z >= BASE_MIN && z <= BASE_MAX){
-    if(x < BASE_MIN || x > BASE_MAX) return true;
-    if(x === WOOD_COUNTER_PT.x && z === WOOD_COUNTER_PT.z) return true; // 木材売買カウンター
-    if(x === NPC_COUNTER_PT.x && z === NPC_COUNTER_PT.z) return true;   // NPCカウンター
-    if(x === EFF_COUNTER_PT.x && z === EFF_COUNTER_PT.z) return true;   // 効率化カウンター
-    return false;
-  }
+  if(z >= BASE_MIN && z <= BASE_MAX) return x < BASE_MIN || x > BASE_MAX; // 拠点ゾーン(西端=木材売買カウンター)
   if(z === DOOR_Z) return !inDoorGap(x); // 門(扉の幅だけ通れる)
-  if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z){
-    if(x < WORLD_MIN_X || x > WORLD_MAX_X) return true;
-    for(const t of trees){
-      if(t.state === "tree" && t.x === x && t.z === z) return true; // 木の幹に重ならない
-    }
-    return false;
-  }
+  if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z) return x < WORLD_MIN_X || x > WORLD_MAX_X; // 森ゾーン
   return true; // 範囲外
 }
 
@@ -554,8 +549,13 @@ function addPad(group, x,z,color){
   group.add(mesh);
 }
 function buildGround(group){
-  addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, 6, 0.2, 6);        // 拠点ゾーンの地面(x:-3..3, z:-3..3)
-  addBox(group, new THREE.MeshStandardMaterial({color:0x3f5e2f}), 0,-0.1,7, 6, 0.2, 8);        // 森ゾーンの地面(x:-3..3, z:3..11)
+  const width = (WORLD_MAX_X - WORLD_MIN_X + 1) + 1; // 壁-壁の幅
+  const baseZLen = (BASE_MAX - BASE_MIN + 1) + 1;
+  const forestZLen = (FOREST_MAX_Z+1) - DOOR_Z;
+  addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, width, 0.2, baseZLen); // 拠点ゾーンの地面(草)
+  addBox(group, new THREE.MeshStandardMaterial({color:0x3f5e2f}), 0,-0.1,(DOOR_Z+FOREST_MAX_Z+1)/2, width, 0.2, forestZLen); // 森ゾーンの地面
+  const plazaCx = (PLAZA_MIN_X+PLAZA_MAX_X)/2, plazaCz = (PLAZA_MIN_Z+PLAZA_MAX_Z)/2;
+  addBox(group, new THREE.MeshStandardMaterial({color:0x8a6f4a}), plazaCx,-0.1,plazaCz, 7, 0.2, 7); // 客NPC待機エリアの地面(土の広場)
 }
 function buildFence(group){
   const mat = new THREE.MeshStandardMaterial({ color:0x8a6b3f });
@@ -565,7 +565,12 @@ function buildFence(group){
   const width = (WORLD_MAX_X - WORLD_MIN_X + 1);
   addBox(group, mat, 0, 0.8, BASE_MIN-1, width, 1.6, 0.4);            // 北(拠点)
   addBox(group, mat, WORLD_MAX_X+1, 0.8, zMid, 0.4, 1.6, zSpan);      // 東(拠点〜森まで通し)
-  addBox(group, mat, WORLD_MIN_X-1, 0.8, zMid, 0.4, 1.6, zSpan);      // 西(拠点〜森まで通し)
+  // 西(拠点〜森まで通し。木材売買カウンターの範囲だけ切れ目にして、カウンター本体で塞ぐ)
+  const cZFrom = DEPOSIT_PT.z - 0.5, cZTo = TRADE_PT.z + 0.5; // カウンターの占めるz範囲
+  const westNorthLen = cZFrom - (BASE_MIN-1);
+  const westSouthLen = (FOREST_MAX_Z+1) - cZTo;
+  addBox(group, mat, WORLD_MIN_X-1, 0.8, ((BASE_MIN-1)+cZFrom)/2, 0.4, 1.6, westNorthLen);
+  addBox(group, mat, WORLD_MIN_X-1, 0.8, (cZTo+(FOREST_MAX_Z+1))/2, 0.4, 1.6, westSouthLen);
   const doorLeftW = DOOR_FROM - (WORLD_MIN_X-1), doorRightW = (WORLD_MAX_X+1) - DOOR_TO;
   addBox(group, mat, ((WORLD_MIN_X-1)+DOOR_FROM)/2, 0.8, DOOR_Z, doorLeftW, 1.6, 0.4);   // 門の行・西側
   addBox(group, mat, (DOOR_TO+(WORLD_MAX_X+1))/2, 0.8, DOOR_Z, doorRightW, 1.6, 0.4);    // 門の行・東側
@@ -593,20 +598,9 @@ function setDoorSwing(door, p){
   door.leftPivot.rotation.y = -p * Math.PI * 0.5;
   door.rightPivot.rotation.y = p * Math.PI * 0.5;
 }
-function buildNpcCounter(group){
-  // NPCカウンター(拠点、木材売買カウンターの隣)。伐採NPC・売買NPCをここで統一して雇用する
-  addBox(group, new THREE.MeshStandardMaterial({color:0x5a6a3a}), NPC_COUNTER_PT.x, 0.5, NPC_COUNTER_PT.z, 1.0, 1.0, 1.0); // カウンター本体
-  addBox(group, new THREE.MeshStandardMaterial({color:0x3c4a22}), NPC_COUNTER_PT.x, 1.05, NPC_COUNTER_PT.z, 1.2, 0.15, 1.2); // 天板
-  addPad(group, NPC_COUNTER_PT.x, NPC_COUNTER_PT.z, 0xe0a83f); // エリア表示(ここに来ると雇用フォームを選択できる)
-  // 常駐の受付NPC(見た目のみ、装飾)
-  const npcG = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.28,0.8,10), new THREE.MeshStandardMaterial({color:0x9c7a5f}));
-  body.position.y = 0.5;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22,10,10), new THREE.MeshStandardMaterial({color:0xe8c39e}));
-  head.position.y = 1.0;
-  npcG.add(body, head);
-  npcG.position.set(NPC_COUNTER_PT.x, 0, NPC_COUNTER_PT.z);
-  group.add(npcG);
+function buildNpcArea(group){
+  // NPCエリア(拠点)。建物は置かず、床のエリア表示のみ。ここに来ると伐採NPC・売買NPCを統一して雇用できる
+  addPad(group, NPC_COUNTER_PT.x, NPC_COUNTER_PT.z, 0xe0a83f);
 }
 // 雇用NPC(伐採・売買)の簡素なパーツ構成。色で種別を区別する
 function buildWorkerMesh(color){
@@ -618,21 +612,62 @@ function buildWorkerMesh(color){
   g.add(body, head);
   return g;
 }
-// 伐採NPCは担当する木のすぐ脇に配置する(1本の木に1NPC)
+// 伐採NPC用: 通常のパーツに加え、木のそばで作業中だけ表示する伐採エフェクト(木くず)を付ける
+function buildHarvestWorkerMesh(color){
+  const g = buildWorkerMesh(color);
+  const chip = new THREE.Mesh(new THREE.ConeGeometry(0.09,0.16,5), new THREE.MeshStandardMaterial({color:0xc98a4b}));
+  chip.name = "effect";
+  chip.position.set(0.3, 1.2, 0);
+  chip.visible = false;
+  g.add(chip);
+  return g;
+}
+// 伐採NPCの現在位置(木まで1マスずつ歩いている途中の座標、または到着後の木の位置)
 function harvestWorkerVisualPos(w){
-  if(w.treeIdx == null) return { x: NPC_COUNTER_PT.x, z: NPC_COUNTER_PT.z + 1 };
-  const t = trees[w.treeIdx];
-  return { x: t.x, z: t.z + 0.6 };
+  return w.pos || { x: NPC_COUNTER_PT.x, z: NPC_COUNTER_PT.z };
 }
 // 売買NPCは売買ポイントのまわりに小さく集まって配置する
 function sellWorkerVisualPos(i){
   const angle = (i / WORKER_MAX) * Math.PI * 2;
   return { x: TRADE_PT.x + Math.cos(angle)*0.55, z: TRADE_PT.z + Math.sin(angle)*0.55 };
 }
-function buildEfficiencyCounter(group){
-  addBox(group, new THREE.MeshStandardMaterial({color:0x3d5a7a}), EFF_COUNTER_PT.x, 0.5, EFF_COUNTER_PT.z, 1.0, 1.0, 1.0); // カウンター本体
-  addBox(group, new THREE.MeshStandardMaterial({color:0x28405c}), EFF_COUNTER_PT.x, 1.05, EFF_COUNTER_PT.z, 1.2, 0.15, 1.2); // 天板
-  addPad(group, EFF_COUNTER_PT.x, EFF_COUNTER_PT.z, 0x4f8fe0); // エリア表示(ここに来ると強化フォームを選択できる)
+// 伐採NPCを1マスずつ担当の木へ歩かせる(毎フレーム呼び出す)
+function updateHarvestWorkersWalk(dt){
+  for(const w of state.harvestWorkers){
+    if(w.treeIdx == null || !w.pos) continue;
+    const t = trees[w.treeIdx];
+    if(w.pos.x === t.x && w.pos.z === t.z){ w.arrived = true; continue; }
+    w.arrived = false;
+    w.stepTimer = (w.stepTimer||0) - dt;
+    if(w.stepTimer <= 0){
+      if(w.pos.x !== t.x) w.pos.x += Math.sign(t.x - w.pos.x);
+      else if(w.pos.z !== t.z) w.pos.z += Math.sign(t.z - w.pos.z);
+      w.stepTimer = WORKER_STEP_DURATION;
+    }
+  }
+}
+// 伐採NPCのメッシュの位置・伐採エフェクトの見た目を毎フレーム更新する
+function updateHarvestWorkerVisuals(){
+  if(!world || !world.harvestWorkerMeshes) return;
+  const now = performance.now();
+  state.harvestWorkers.forEach((w,i)=>{
+    const m = world.harvestWorkerMeshes[i];
+    if(!m) return;
+    const pos = harvestWorkerVisualPos(w);
+    m.position.set(pos.x, 0, pos.z);
+    const eff = m.getObjectByName("effect");
+    if(eff){
+      eff.visible = !!w.arrived;
+      if(w.arrived){
+        eff.position.y = 1.15 + Math.sin(now/150)*0.08;
+        eff.rotation.y = now/300;
+      }
+    }
+  });
+}
+function buildEfficiencyArea(group){
+  // 効率化エリア(拠点)。建物は置かず、床のエリア表示のみ。ここに来ると効率化の強化フォームを選択できる
+  addPad(group, EFF_COUNTER_PT.x, EFF_COUNTER_PT.z, 0x4f8fe0);
 }
 function buildLogPileAt(group, cx, cz, baseY, count){
   // 積まれた木材の山(見た目のみ)。丸太メッシュをあらかじめ用意し非表示にしておき、量に応じて表示数を切り替える
@@ -651,11 +686,15 @@ function buildLogPileAt(group, cx, cz, baseY, count){
   return logs;
 }
 function buildWoodCounter(group){
-  addBox(group, new THREE.MeshStandardMaterial({color:0x7a5a34}), WOOD_COUNTER_PT.x, 0.5, WOOD_COUNTER_PT.z, 1.0, 1.0, 1.0);        // カウンター本体
-  addBox(group, new THREE.MeshStandardMaterial({color:0x5c4326}), WOOD_COUNTER_PT.x, 1.05, WOOD_COUNTER_PT.z, 1.2, 0.15, 1.2);      // 天板
+  // 木材売買カウンター(拠点の西側、柵に埋め込み)。内側(拠点)にプレイヤー用の置き場・売買ポイント、
+  // 外側(客NPC待機エリア)から客NPCがアクセスするドライブスルー形式
+  const cz = (DEPOSIT_PT.z + TRADE_PT.z) / 2;
+  const clen = (TRADE_PT.z - DEPOSIT_PT.z) + 2.2;
+  addBox(group, new THREE.MeshStandardMaterial({color:0x7a5a34}), WOOD_COUNTER_X, 0.5, cz, 1.0, 1.0, clen);   // カウンター本体
+  addBox(group, new THREE.MeshStandardMaterial({color:0x5c4326}), WOOD_COUNTER_X, 1.05, cz, 1.2, 0.15, clen+0.2); // 天板
   addPad(group, DEPOSIT_PT.x, DEPOSIT_PT.z, 0xc98a4b); // 木材を置くポイント
   addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント
-  return buildLogPileAt(group, WOOD_COUNTER_PT.x, WOOD_COUNTER_PT.z, 1.28, 10);
+  return buildLogPileAt(group, WOOD_COUNTER_X, cz, 1.28, 10);
 }
 function buildTreeMesh(t){
   const g = new THREE.Group();
@@ -690,7 +729,8 @@ function nextNpcColor(){
   return c;
 }
 function npcSlotPos(i){
-  return { x: TRADE_PT.x, z: TRADE_PT.z + 1 + i };
+  // 客NPCは拠点の外(客NPC待機エリア)から、木材売買カウンターへ向けて並ぶ
+  return { x: PLAZA_MAX_X - i, z: TRADE_PT.z };
 }
 function buildNpcMesh(color){
   const g = new THREE.Group();
@@ -757,7 +797,8 @@ function syncWorkerMeshes(){
   if(world.harvestWorkerMeshes) world.harvestWorkerMeshes.forEach(m=> world.group.remove(m));
   if(world.sellWorkerMeshes) world.sellWorkerMeshes.forEach(m=> world.group.remove(m));
   world.harvestWorkerMeshes = state.harvestWorkers.map((w)=>{
-    const m = buildWorkerMesh(0x7a9c5f); // 緑系=伐採NPC(担当の木のすぐ脇に立つ)
+    if(!w.pos) w.pos = { x: NPC_COUNTER_PT.x, z: NPC_COUNTER_PT.z }; // 旧セーブ互換
+    const m = buildHarvestWorkerMesh(0x7a9c5f); // 緑系=伐採NPC(木まで歩いて向かい、伐採エフェクトを出す)
     const pos = harvestWorkerVisualPos(w);
     m.position.set(pos.x, 0, pos.z);
     world.group.add(m);
@@ -809,8 +850,8 @@ function initScene(){
   buildGround(group);
   buildFence(group);
   const pileLogs = buildWoodCounter(group);
-  buildEfficiencyCounter(group);
-  buildNpcCounter(group);
+  buildEfficiencyArea(group);
+  buildNpcArea(group);
   const door = buildDoorPair(group);
   for(const t of trees){ t.mesh = buildTreeMesh(t); group.add(t.mesh); }
   scene.add(group);
@@ -972,7 +1013,11 @@ function hireWorker(kind){
   if(state.resources.gold < HIRE_COST){ toast("ゴールドが足りない"); return; }
   state.resources.gold -= HIRE_COST;
   const w = { remaining: HIRE_YIELD, treeIdx: null };
-  if(kind === "harvest") assignTreeToWorker(w);
+  if(kind === "harvest"){
+    assignTreeToWorker(w);
+    w.pos = { x: NPC_COUNTER_PT.x, z: NPC_COUNTER_PT.z }; // NPCエリアから木まで1マスずつ歩く
+    w.arrived = false;
+  }
   arr.push(w);
   state.hiredLastTick = Date.now();
   syncWorkerMeshes();
@@ -986,9 +1031,16 @@ function processHiredWorkers(now){
   state.hiredLastTick = now;
   if(elapsedSec <= 0) return;
   let changed = false;
-  // 伐採NPC: 森へ行かなくても直接カウンターの在庫(state.resources.wood)へ生産
+  // 伐採NPC: 担当の木に到着してから、木材をカウンターの在庫(state.resources.wood)へ生産する
   for(let i = state.harvestWorkers.length-1; i >= 0; i--){
     const w = state.harvestWorkers[i];
+    // 長時間放置していた場合(オフライン等)は、歩いている途中でも到着済みとみなす
+    if(!w.arrived && elapsedSec > 1 && w.treeIdx != null){
+      const t = trees[w.treeIdx];
+      w.pos = { x: t.x, z: t.z };
+      w.arrived = true;
+    }
+    if(!w.arrived) continue;
     const room = Math.max(0, storageCap() - state.resources.wood);
     const produced = Math.min(elapsedSec*HARVEST_NPC_RATE, w.remaining, room);
     if(produced > 0){ state.resources.wood += produced; w.remaining -= produced; changed = true; }
@@ -1057,6 +1109,8 @@ function animate(ts){
     attemptStep(heldDir);
   }
   updateDoorSwing(dt);
+  updateHarvestWorkersWalk(dt);
+  updateHarvestWorkerVisuals();
   processHiredWorkers(Date.now());
   updateInteractions(dt);
   updateHud();
