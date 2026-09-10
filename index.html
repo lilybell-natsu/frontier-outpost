@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.4.0">
+<meta name="app-version" content="0.5.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -177,24 +177,43 @@
   .pt-label.dep{ background:#c98a4bdd; color:#2a1a0a; }
   .pt-label.trd{ background:#f0c245dd; color:#3a2a05; }
 
+  .fade-overlay{ position:absolute; inset:0; background:#000; opacity:0; pointer-events:none; z-index:9; }
+
   .dpad{
-    display:grid; grid-template-columns:42px 42px 42px; grid-template-rows:42px 42px 42px;
-    gap:4px; margin:12px auto 4px; width:fit-content;
+    position:absolute; left:8px; bottom:8px; z-index:6;
+    display:grid; grid-template-columns:36px 36px 36px; grid-template-rows:36px 36px 36px;
+    gap:3px;
   }
   .dpad button{
-    background:var(--panel-2); border:1px solid var(--card-border); border-radius:8px;
-    color:var(--parchment); font-size:15px; cursor:pointer;
+    background:#00000088; border:1px solid #ffffff33; border-radius:8px;
+    color:var(--parchment); font-size:14px; cursor:pointer;
   }
-  .dpad button:active, .dpad button.pressed{background:var(--card);}
+  .dpad button:active, .dpad button.pressed{background:#000000cc;}
   .dpad .dp-up{grid-column:2; grid-row:1;}
   .dpad .dp-left{grid-column:1; grid-row:2;}
   .dpad .dp-right{grid-column:3; grid-row:2;}
   .dpad .dp-down{grid-column:2; grid-row:3;}
 
+  .ctx-btn{
+    position:absolute; right:8px; bottom:8px; z-index:6;
+    background:linear-gradient(180deg,#f0c245,#c9982a); color:#3a2a05;
+    border:none; border-radius:20px; padding:9px 14px; font-size:12px; font-weight:700;
+    box-shadow:var(--shadow); cursor:pointer;
+  }
+  .ctx-btn[hidden]{display:none;}
+
   .panel-empty{
     text-align:center; color:var(--parchment-dim); font-size:12.5px;
     padding:16px 10px; line-height:1.6;
   }
+
+  .eff-row{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:10px 0; border-bottom:1px solid var(--card-border);
+  }
+  .eff-row:last-child{border-bottom:none;}
+  .eff-info .name{font-size:13px; font-weight:700; color:var(--parchment);}
+  .eff-info .lv{font-size:11px; color:var(--parchment-dim); margin-top:2px;}
 
   /* toast */
   #toast{
@@ -274,6 +293,7 @@
       <div class="section-title">拠点</div>
       <div class="scene-wrap" id="sceneWrap">
         <canvas id="gameCanvas"></canvas>
+        <div class="fade-overlay" id="fadeOverlay"></div>
         <div class="hud">
           <div class="hud-map" id="hudMapName">🏕️ 拠点</div>
           <div class="hud-carry" id="hudCarry">🪵 運搬中: 0</div>
@@ -281,14 +301,15 @@
         <div class="pt-label dep" id="lblDeposit">📦 置き場</div>
         <div class="pt-label trd" id="lblTrade">💰 売買</div>
         <div class="hud-action" id="hudAction"></div>
+        <button class="ctx-btn" id="ctxBtn" hidden></button>
+        <div class="dpad">
+          <button class="dp-up" data-dir="up" aria-label="上へ">▲</button>
+          <button class="dp-left" data-dir="left" aria-label="左へ">◀</button>
+          <button class="dp-right" data-dir="right" aria-label="右へ">▶</button>
+          <button class="dp-down" data-dir="down" aria-label="下へ">▼</button>
+        </div>
       </div>
-      <div class="dpad">
-        <button class="dp-up" data-dir="up" aria-label="上へ">▲</button>
-        <button class="dp-left" data-dir="left" aria-label="左へ">◀</button>
-        <button class="dp-right" data-dir="right" aria-label="右へ">▶</button>
-        <button class="dp-down" data-dir="down" aria-label="下へ">▼</button>
-      </div>
-      <div class="panel-empty">十字キーでプレイヤーを操作。森で木材を集めてカウンターに運ぼう。</div>
+      <div class="panel-empty">十字キー(PCは矢印キーも可)でプレイヤーを操作。森で木材を集めてカウンターに運ぼう。</div>
     </div>
 
     <div class="view" id="view-market">
@@ -319,6 +340,16 @@
   </div>
 </div>
 
+<div class="modal-back" id="effModal" hidden>
+  <div class="modal">
+    <h2>🛠️ 効率化</h2>
+    <div id="effList"></div>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn btn-sub" id="btnCloseEff">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
 "use strict";
@@ -338,8 +369,11 @@ let state = null;
 function defaultState(){
   return {
     v: GAME_VERSION,
-    resources: { wood:50, food:50, gold:20 },
-    player: { map:"base", x:0, z:4, carryWood:0 }
+    resources: { wood:0, food:0, gold:0 },
+    player: { map:"base", x:0, z:4, carryWood:6 },
+    hiredJob: { remaining:0, lastTick: Date.now() },
+    boxWood: 0,
+    upgrades: { amount:0, speed:0, price:0 }
   };
 }
 
@@ -349,8 +383,12 @@ function load(){
     if(!raw) return defaultState();
     const parsed = JSON.parse(raw);
     if(!parsed || parsed.v !== GAME_VERSION) return defaultState();
-    if(!parsed.player) parsed.player = { map:"base", x:0, z:4, carryWood:0 }; // 旧セーブ互換
-    if(!parsed.resources) parsed.resources = { wood:50, food:50, gold:20 };
+    // 旧セーブ互換: 新フィールドが無ければ補う
+    if(!parsed.player) parsed.player = { map:"base", x:0, z:4, carryWood:6 };
+    if(!parsed.resources) parsed.resources = { wood:0, food:0, gold:0 };
+    if(!parsed.hiredJob) parsed.hiredJob = { remaining:0, lastTick: Date.now() };
+    if(typeof parsed.boxWood !== "number") parsed.boxWood = 0;
+    if(!parsed.upgrades) parsed.upgrades = { amount:0, speed:0, price:0 };
     return parsed;
   }catch(e){
     return defaultState();
@@ -405,27 +443,48 @@ const DEPOSIT_PT = { x:-3.6, z:-1.2 };  // 木材を置くポイント(カウン
 const TRADE_PT   = { x:-3.6, z: 1.2 };  // 売買するポイント(カウンター右・固定)
 const INTERACT_RADIUS = 1.1;
 const HARVEST_RADIUS = 1.4;
-const HARVEST_SECONDS = 3;              // 木に近づいてから木材化するまでの時間
+const HARVEST_SECONDS_BASE = 3;         // 木に近づいてから木材化するまでの時間(効率化で短縮)
 const REGROW_SECONDS = 10;              // 伐採後に木が元に戻るまでの時間
-const WOOD_PER_TREE = 3;
+const WOOD_PER_TREE_BASE = 3;           // 1回の伐採で得られる木材(効率化で増加)
 const PLAYER_SPEED = 7.5;               // units/sec(v0.3.0の4.2から引き上げ)
 const WOOD_TRANSFER_PER_SEC = 3;        // 売買ポイントでNPCへ木材を渡す速さ(1秒あたり)
 const NPC_BUY_ORDER = 3;                // NPC1人が購入する木材の量
-const TRADE_REWARD_GOLD = 3;            // 1回の売買(NPC1人分)が成立するごとの報酬
+const TRADE_REWARD_GOLD_BASE = 3;       // 1回の売買(NPC1人分)が成立するごとの報酬(効率化で増加)
 const QUEUE_SIZE = 4;                   // 常に並んでいるNPCの人数
 const PILE_UNIT = 8;                    // カウンター上の木材の山: この量ごとに丸太1本を表示
 const NPC_COLORS = [0xd1594a, 0x4f8fe0, 0x8a6fd4, 0xe0a83f, 0x5cb85c, 0xe07fc0]; // NPCの色分け
 
+const HIRE_COST = 2;                    // 伐採NPCを雇うのに必要なゴールド
+const HIRE_YIELD = 6;                   // 1回雇うごとに生産される木材量
+const AUTO_HARVEST_INTERVAL = 2.5;      // 雇用NPCが木材1個を生産する間隔(秒、手動よりゆっくり)
+const BOX_CAP = 12;                     // ボックスの最大貯蔵量
+const BOX_PILE_UNIT = 2;                // ボックスの見た目: この量ごとに丸太1本を表示
+
+const UPGRADE_MAX = 6;                  // 効率化の最大レベル
+const UPGRADE_DEFS = {
+  amount: { name:"木材の確保量", icon:"🪓", desc:(lv)=>`1回の伐採で +${lv} 個` },
+  speed:  { name:"伐採速度",     icon:"⚡", desc:(lv)=>`伐採時間 -${(lv*0.4).toFixed(1)}秒` },
+  price:  { name:"木材の単価",   icon:"💰", desc:(lv)=>`1回の取引 +${lv}G` }
+};
+function upgradeCost(level){ return Math.round(6 * Math.pow(1.6, level)); }
+function woodPerTree(){ return WOOD_PER_TREE_BASE + state.upgrades.amount; }
+function harvestSeconds(){ return Math.max(1, HARVEST_SECONDS_BASE - state.upgrades.speed*0.4); }
+function tradeRewardGold(){ return TRADE_REWARD_GOLD_BASE + state.upgrades.price; }
+
 const TREE_DEFS = [ {x:-2.4,z:-1.8}, {x:2.4,z:-1.8}, {x:-2.4,z:1.8}, {x:2.4,z:1.8} ]; // まずは木を4本
+const NPC_COUNTER_PT = { x:-1.0, z:0 }; // 伐採NPCを雇うカウンター(森)
+const BOX_PT = { x:1.0, z:0 };          // カウンター横のボックス(森・回収ポイント)
+const EFF_COUNTER_PT = { x:3.8, z:0 };  // 効率化カウンター(拠点)
 
 let world = null;           // three.js関連オブジェクト一式(initSceneで構築)
 let trees = TREE_DEFS.map(p => ({ x:p.x, z:p.z, state:"tree", progress:0, stumpUntil:0, mesh:null }));
-let heldDir = null;         // 十字キーで押下中の方向
+let heldDir = null;         // 十字キー/矢印キーで押下中の方向
 let harvestingTreeIdx = -1; // 現在伐採進行中の木(HUD表示用)
 let sellAccum = 0;          // 木材受け渡しの端数を貯める累積器
 let npcQueue = [];          // 購入待ちNPCの列(先頭が現在取引中)
 let npcColorIdx = 0;
 let lastFrameTime = null;
+let transition = null;      // 扉の開閉演出の進行状態(nullなら演出なし)
 
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 function distTo(x,z,px,pz){ const dx=x-px, dz=z-pz; return Math.sqrt(dx*dx+dz*dz); }
@@ -437,6 +496,7 @@ function blockedInBase(x,z){
   if(x >= MAP_HALF-0.35) return true;                                 // 東の柵
   if(x <= -MAP_HALF+0.35 && !(z>=COUNTER.minZ-0.5 && z<=COUNTER.maxZ+0.5)) return true; // 西の柵(カウンター部分以外)
   if(x>=COUNTER.minX-0.5 && x<=COUNTER.maxX+0.6 && z>=COUNTER.minZ && z<=COUNTER.maxZ) return true; // カウンター本体
+  if(distTo(EFF_COUNTER_PT.x,EFF_COUNTER_PT.z,x,z) < 0.9) return true; // 効率化カウンター
   return false;
 }
 function blockedInForest(x,z){
@@ -447,6 +507,8 @@ function blockedInForest(x,z){
     if(t.state !== "tree") continue;
     if(distTo(t.x,t.z,x,z) < 0.7) return true; // 木の幹に重ならない
   }
+  if(distTo(NPC_COUNTER_PT.x,NPC_COUNTER_PT.z,x,z) < 0.9) return true; // 伐採NPCカウンター
+  if(distTo(BOX_PT.x,BOX_PT.z,x,z) < 0.7) return true;                 // ボックス
   return false;
 }
 
@@ -475,6 +537,63 @@ function makeFence(group, color){
   const postMat = new THREE.MeshStandardMaterial({ color:0x5a4128 });
   addBox(group, postMat, DOOR_FROM, 1.1, MAP_HALF, 0.3, 2.2, 0.3); // 門柱
   addBox(group, postMat, DOOR_TO, 1.1, MAP_HALF, 0.3, 2.2, 0.3);
+}
+function buildDoorPair(group, z){
+  // 扉(観音開き)。閉/開はrotation.yで表現し、演出時にアニメーションさせる
+  const mat = new THREE.MeshStandardMaterial({ color:0x6b4a2b });
+  const halfW = (DOOR_TO - DOOR_FROM) / 2;
+  const leftPivot = new THREE.Group(); leftPivot.position.set(DOOR_FROM, 0, z);
+  const leftPanel = new THREE.Mesh(new THREE.BoxGeometry(halfW, 1.7, 0.12), mat);
+  leftPanel.position.set(halfW/2, 0.95, 0);
+  leftPivot.add(leftPanel);
+  const rightPivot = new THREE.Group(); rightPivot.position.set(DOOR_TO, 0, z);
+  const rightPanel = new THREE.Mesh(new THREE.BoxGeometry(halfW, 1.7, 0.12), mat);
+  rightPanel.position.set(-halfW/2, 0.95, 0);
+  rightPivot.add(rightPanel);
+  group.add(leftPivot, rightPivot);
+  return { leftPivot, rightPivot };
+}
+function setDoorSwing(door, p){
+  if(!door) return;
+  door.leftPivot.rotation.y = -p * Math.PI * 0.5;
+  door.rightPivot.rotation.y = p * Math.PI * 0.5;
+}
+function buildLogPile(group, cx, cz, baseY, count){
+  // 積まれた木材の山(見た目のみ)。丸太メッシュをあらかじめ用意し非表示にしておき、量に応じて表示数を切り替える
+  const mat = new THREE.MeshStandardMaterial({ color:0xc98a4b });
+  const logs = [];
+  const perRow = 3;
+  for(let i=0; i<count; i++){
+    const row = Math.floor(i/perRow), col = i%perRow;
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,0.45,8), mat);
+    mesh.rotation.z = Math.PI/2;
+    mesh.position.set(cx-0.3+col*0.3, baseY+row*0.18, cz);
+    mesh.visible = false;
+    group.add(mesh);
+    logs.push(mesh);
+  }
+  return logs;
+}
+function buildNpcCounterAndBox(group){
+  addBox(group, new THREE.MeshStandardMaterial({color:0x6a5a3a}), NPC_COUNTER_PT.x, 0.5, NPC_COUNTER_PT.z, 1.2, 1.0, 1.0); // カウンター本体
+  addBox(group, new THREE.MeshStandardMaterial({color:0x4a3c22}), NPC_COUNTER_PT.x, 1.05, NPC_COUNTER_PT.z, 1.4, 0.15, 1.2); // 天板
+  // 常駐の伐採NPC(見た目のみ、装飾)
+  const npcG = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28,0.28,0.8,10), new THREE.MeshStandardMaterial({color:0x7a9c5f}));
+  body.position.y = 0.5;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22,10,10), new THREE.MeshStandardMaterial({color:0xe8c39e}));
+  head.position.y = 1.0;
+  npcG.add(body, head);
+  npcG.position.set(NPC_COUNTER_PT.x, 0, NPC_COUNTER_PT.z - 0.9);
+  group.add(npcG);
+  // ボックス(伐採されたNPC産の木材がここに貯まる)
+  addBox(group, new THREE.MeshStandardMaterial({color:0x8a6b3f}), BOX_PT.x, 0.35, BOX_PT.z, 0.9, 0.7, 0.9);
+  const boxLogs = buildLogPile(group, BOX_PT.x, BOX_PT.z, 0.78, 6);
+  return boxLogs;
+}
+function buildEfficiencyCounter(group){
+  addBox(group, new THREE.MeshStandardMaterial({color:0x3d5a7a}), EFF_COUNTER_PT.x, 0.5, EFF_COUNTER_PT.z, 1.2, 1.0, 1.2); // カウンター本体
+  addBox(group, new THREE.MeshStandardMaterial({color:0x28405c}), EFF_COUNTER_PT.x, 1.05, EFF_COUNTER_PT.z, 1.4, 0.15, 1.4); // 天板
 }
 function buildWoodPile(group){
   // カウンター上に積まれる木材の山(木材の量に応じて丸太の本数を出し分ける、updateWoodPileで制御)
@@ -505,7 +624,9 @@ function buildBaseGroup(){
   addPad(group, DEPOSIT_PT.x, DEPOSIT_PT.z, 0xc98a4b); // 木材を置くポイント
   addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント
   const pileLogs = buildWoodPile(group);
-  return { group, pileLogs };
+  buildEfficiencyCounter(group);
+  const door = buildDoorPair(group, MAP_HALF);
+  return { group, pileLogs, door };
 }
 function buildTreeMesh(t){
   const g = new THREE.Group();
@@ -530,7 +651,9 @@ function buildForestGroup(){
   addBox(group, postMat, DOOR_FROM, 1.1, -MAP_HALF, 0.3, 2.2, 0.3); // 拠点へ戻る門枠
   addBox(group, postMat, DOOR_TO, 1.1, -MAP_HALF, 0.3, 2.2, 0.3);
   for(const t of trees){ t.mesh = buildTreeMesh(t); group.add(t.mesh); }
-  return group;
+  const boxLogs = buildNpcCounterAndBox(group);
+  const door = buildDoorPair(group, -MAP_HALF);
+  return { group, boxLogs, door };
 }
 function buildPlayerMesh(){
   const g = new THREE.Group();
@@ -580,15 +703,21 @@ function repositionNpcQueue(){
 function completeFrontNpcPurchase(){
   const npc = npcQueue.shift();
   if(npc && npc.mesh && world) world.baseGroup.remove(npc.mesh);
-  state.resources.gold += TRADE_REWARD_GOLD;
+  const reward = tradeRewardGold();
+  state.resources.gold += reward;
   ensureQueueFilled();
   repositionNpcQueue();
-  toast(`🤝 取引成立!+${TRADE_REWARD_GOLD}G`);
+  toast(`🤝 取引成立!+${reward}G`);
 }
 function updateWoodPile(){
   if(!world || !world.pileLogs) return;
   const count = Math.max(0, Math.min(world.pileLogs.length, Math.round(state.resources.wood / PILE_UNIT)));
   world.pileLogs.forEach((mesh,i)=>{ mesh.visible = i < count; });
+}
+function updateBoxPile(){
+  if(!world || !world.boxLogs) return;
+  const count = Math.max(0, Math.min(world.boxLogs.length, Math.round(state.boxWood / BOX_PILE_UNIT)));
+  world.boxLogs.forEach((mesh,i)=>{ mesh.visible = i < count; });
 }
 
 // --- 3D座標→画面座標(ポイントのラベル表示に使用) -------------------------
@@ -626,18 +755,24 @@ function initScene(){
   scene.add(sun);
 
   const baseBuild = buildBaseGroup();
-  const forestGroup = buildForestGroup();
-  scene.add(baseBuild.group, forestGroup);
+  const forestBuild = buildForestGroup();
+  scene.add(baseBuild.group, forestBuild.group);
   const playerMesh = buildPlayerMesh();
   scene.add(playerMesh);
 
-  world = { renderer, scene, camera, baseGroup: baseBuild.group, forestGroup, playerMesh, wrap, pileLogs: baseBuild.pileLogs };
+  world = {
+    renderer, scene, camera, wrap,
+    baseGroup: baseBuild.group, forestGroup: forestBuild.group, playerMesh,
+    pileLogs: baseBuild.pileLogs, boxLogs: forestBuild.boxLogs,
+    baseDoor: baseBuild.door, forestDoor: forestBuild.door
+  };
   resizeScene();
   window.addEventListener("resize", resizeScene);
   syncMapVisibility();
   updatePlayerMesh();
   ensureQueueFilled();
   updateWoodPile();
+  updateBoxPile();
   requestAnimationFrame(animate);
 }
 function resizeScene(){
@@ -661,22 +796,65 @@ function updatePlayerMesh(){
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 
+// --- 扉の開閉・マップ切替演出 -------------------------------------------
+// 「マップ読み込み」的な瞬間切替ではなく、扉が開く→暗転→切替→明転→扉が閉じる、という一連の演出にする
+function setFade(v){
+  const el = document.getElementById("fadeOverlay");
+  if(el) el.style.opacity = v;
+}
+function startDoorTransition(door, doSwitch){
+  transition = { stage:"opening", t:0, door, doSwitch };
+}
+function updateTransition(dt){
+  if(!transition) return;
+  const T = transition;
+  if(T.stage === "opening"){
+    T.t += dt/0.3;
+    setDoorSwing(T.door, Math.min(1,T.t));
+    if(T.t >= 1){ T.stage = "fadeout"; T.t = 0; }
+  } else if(T.stage === "fadeout"){
+    T.t += dt/0.18;
+    setFade(Math.min(1,T.t));
+    if(T.t >= 1){ T.doSwitch(); T.stage = "fadein"; T.t = 0; }
+  } else if(T.stage === "fadein"){
+    T.t += dt/0.18;
+    setFade(Math.max(0,1-T.t));
+    if(T.t >= 1){ T.stage = "hold"; T.t = 0; }
+  } else if(T.stage === "hold"){
+    T.t += dt;
+    if(T.t >= 0.25){ T.stage = "closing"; T.t = 0; }
+  } else if(T.stage === "closing"){
+    T.t += dt/0.3;
+    setDoorSwing(T.door, Math.max(0,1-T.t));
+    if(T.t >= 1){ transition = null; }
+  }
+}
+
 // --- 移動 -----------------------------------------------------------
 function tryMove(dx,dz){
+  if(transition) return; // 扉の演出中は操作を受け付けない
   const p = state.player;
   const nx = clamp(p.x+dx, -MAP_HALF+0.3, MAP_HALF-0.3);
   const nz = clamp(p.z+dz, -MAP_HALF+0.3, MAP_HALF-0.3);
   if(p.map === "base"){
     if(nz > MAP_HALF-0.35 && inDoorGap(nx)){
-      p.map = "forest"; p.x = clamp(nx,-0.9,0.9); p.z = -MAP_HALF+0.6;
-      syncMapVisibility(); toast("🌲 森に入った"); save(); return;
+      const targetX = clamp(nx,-0.9,0.9);
+      startDoorTransition(world.baseDoor, ()=>{
+        p.map = "forest"; p.x = targetX; p.z = -MAP_HALF+0.6;
+        syncMapVisibility(); toast("🌲 森に入った"); save();
+      });
+      return;
     }
     if(!blockedInBase(nx, p.z)) p.x = nx;
     if(!blockedInBase(p.x, nz)) p.z = nz;
   } else {
     if(nz < -MAP_HALF+0.35 && inDoorGap(nx)){
-      p.map = "base"; p.x = clamp(nx,-0.9,0.9); p.z = MAP_HALF-0.6;
-      syncMapVisibility(); toast("🏕️ 拠点に戻った"); save(); return;
+      const targetX = clamp(nx,-0.9,0.9);
+      startDoorTransition(world.forestDoor, ()=>{
+        p.map = "base"; p.x = targetX; p.z = MAP_HALF-0.6;
+        syncMapVisibility(); toast("🏕️ 拠点に戻った"); save();
+      });
+      return;
     }
     if(!blockedInForest(nx, p.z)) p.x = nx;
     if(!blockedInForest(p.x, nz)) p.z = nz;
@@ -690,15 +868,17 @@ function updateForestInteraction(dt){
   for(let i=0;i<trees.length;i++){
     if(trees[i].state === "tree" && distTo(trees[i].x,trees[i].z,p.x,p.z) <= HARVEST_RADIUS){ nearIdx = i; break; }
   }
+  const need = harvestSeconds();
   if(nearIdx >= 0){
     const t = trees[nearIdx];
     t.progress += dt;
     harvestingTreeIdx = nearIdx;
-    if(t.progress >= HARVEST_SECONDS){
+    if(t.progress >= need){
       t.state = "stump"; t.progress = 0; t.stumpUntil = Date.now() + REGROW_SECONDS*1000;
       setTreeVisual(t);
-      p.carryWood += WOOD_PER_TREE;
-      toast(`🪓 木材を${WOOD_PER_TREE}手に入れた!`);
+      const gained = woodPerTree();
+      p.carryWood += gained;
+      toast(`🪓 木材を${gained}手に入れた!`);
       updateHud(); save();
       harvestingTreeIdx = -1;
     }
@@ -709,6 +889,15 @@ function updateForestInteraction(dt){
   const now = Date.now();
   for(const t of trees){
     if(t.state === "stump" && now >= t.stumpUntil){ t.state = "tree"; setTreeVisual(t); }
+  }
+
+  // ボックスの回収(触れるだけで自動回収)
+  if(state.boxWood > 0 && distTo(BOX_PT.x,BOX_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    const amount = state.boxWood;
+    p.carryWood += amount;
+    state.boxWood = 0;
+    updateHud(); updateBoxPile(); save();
+    toast(`📦 ボックスから木材${amount}を回収した`);
   }
 }
 
@@ -762,6 +951,31 @@ function updateBaseInteraction(dt){
   }
 }
 
+// --- 伐採NPCの雇用(森のNPCカウンター) -----------------------------------
+function hireNpc(){
+  if(state.resources.gold < HIRE_COST){ toast("ゴールドが足りない"); return; }
+  state.resources.gold -= HIRE_COST;
+  state.hiredJob.lastTick = Date.now();
+  state.hiredJob.remaining += HIRE_YIELD;
+  renderResBar(); save();
+  toast(`🪙 ${HIRE_COST}Gで伐採を依頼した(+${HIRE_YIELD}予定)`);
+}
+// 現実時間ベースで進む(拠点にいる間・オフラインの間も進む、ボックスの空きがある分だけ)
+function processAutoHarvest(now){
+  const job = state.hiredJob;
+  const last = job.lastTick || now;
+  const elapsedSec = Math.max(0, (now-last)/1000);
+  job.lastTick = now;
+  if(job.remaining <= 0 || elapsedSec <= 0) return;
+  const room = Math.max(0, BOX_CAP - state.boxWood);
+  const produced = Math.min(elapsedSec/AUTO_HARVEST_INTERVAL, job.remaining, room);
+  if(produced > 0){
+    state.boxWood += produced;
+    job.remaining -= produced;
+    updateBoxPile();
+  }
+}
+
 function showAction(text){
   const el = document.getElementById("hudAction");
   el.textContent = text;
@@ -773,11 +987,29 @@ function updateHud(){
   document.getElementById("hudCarry").textContent = `🪵 運搬中: ${state.player.carryWood}`;
   if(state.player.map === "forest"){
     if(harvestingTreeIdx>=0){
-      const pct = Math.min(100, Math.round(trees[harvestingTreeIdx].progress/HARVEST_SECONDS*100));
+      const pct = Math.min(100, Math.round(trees[harvestingTreeIdx].progress/harvestSeconds()*100));
       showAction(`🪓 伐採中… ${pct}%`);
     } else {
       hideAction();
     }
+  }
+}
+
+// 近くにいる時だけ出現する操作ボタン(NPCを雇う/効率化メニューを開く)
+function updateContextButton(){
+  const btn = document.getElementById("ctxBtn");
+  const p = state.player;
+  if(p.map === "forest" && distTo(NPC_COUNTER_PT.x,NPC_COUNTER_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    btn.hidden = false;
+    btn.textContent = `🪙 伐採を依頼(${HIRE_COST}G)`;
+    btn.onclick = hireNpc;
+  } else if(p.map === "base" && distTo(EFF_COUNTER_PT.x,EFF_COUNTER_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    btn.hidden = false;
+    btn.textContent = "🛠️ 効率化";
+    btn.onclick = openEfficiencyModal;
+  } else {
+    btn.hidden = true;
+    btn.onclick = null;
   }
 }
 
@@ -789,15 +1021,20 @@ function animate(ts){
   lastFrameTime = ts;
 
   const baseTabActive = document.getElementById("view-base").classList.contains("active");
-  if(heldDir && baseTabActive){
+  if(heldDir && baseTabActive && !transition){
     let dx=0, dz=0;
     if(heldDir==="up") dz=-1; else if(heldDir==="down") dz=1;
     else if(heldDir==="left") dx=-1; else if(heldDir==="right") dx=1;
     tryMove(dx*PLAYER_SPEED*dt, dz*PLAYER_SPEED*dt);
   }
-  if(state.player.map === "forest") updateForestInteraction(dt);
-  else updateBaseInteraction(dt);
+  updateTransition(dt);
+  processAutoHarvest(Date.now());
+  if(!transition){
+    if(state.player.map === "forest") updateForestInteraction(dt);
+    else updateBaseInteraction(dt);
+  }
   updateHud();
+  updateContextButton();
   updatePlayerMesh();
   updatePointLabels();
   world.renderer.render(world.scene, world.camera);
@@ -872,6 +1109,45 @@ function renderMarket(){
   });
 }
 
+// --- 効率化モーダル(木材の確保量・伐採速度・木材の単価をゴールドで強化) -------
+function openEfficiencyModal(){
+  renderEffList();
+  document.getElementById("effModal").hidden = false;
+}
+function renderEffList(){
+  const wrap = document.getElementById("effList");
+  let html = "";
+  for(const key of Object.keys(UPGRADE_DEFS)){
+    const def = UPGRADE_DEFS[key];
+    const lv = state.upgrades[key];
+    const atCap = lv >= UPGRADE_MAX;
+    const cost = atCap ? null : upgradeCost(lv);
+    html += `<div class="eff-row">
+      <div class="eff-info">
+        <div class="name">${def.icon} ${def.name} Lv.${lv}</div>
+        <div class="lv">${def.desc(lv)}</div>
+      </div>
+      ${atCap
+        ? `<button class="btn btn-sub" disabled>MAX</button>`
+        : `<button class="btn btn-sub" data-eff="${key}" ${state.resources.gold<cost?"disabled":""}>🪙${cost}</button>`}
+    </div>`;
+  }
+  wrap.innerHTML = html;
+  wrap.querySelectorAll("[data-eff]").forEach(btn=>{
+    btn.addEventListener("click", ()=> buyUpgrade(btn.getAttribute("data-eff")));
+  });
+}
+function buyUpgrade(key){
+  const lv = state.upgrades[key];
+  if(lv >= UPGRADE_MAX) return;
+  const cost = upgradeCost(lv);
+  if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
+  state.resources.gold -= cost;
+  state.upgrades[key] += 1;
+  renderResBar(); renderEffList(); save();
+  toast(`🛠️ ${UPGRADE_DEFS[key].name}をLv.${state.upgrades[key]}に強化した!`);
+}
+
 function render(){
   renderResBar();
   renderMarket();
@@ -914,6 +1190,31 @@ document.querySelectorAll(".dpad [data-dir]").forEach(btn=>{
   btn.addEventListener("pointercancel", end);
 });
 
+// PCの矢印キーでも移動できるようにする
+const ARROW_KEY_DIR = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right" };
+window.addEventListener("keydown", (e)=>{
+  const dir = ARROW_KEY_DIR[e.key];
+  if(!dir) return;
+  e.preventDefault();
+  heldDir = dir;
+  const btn = document.querySelector(`.dpad [data-dir="${dir}"]`);
+  if(btn) btn.classList.add("pressed");
+});
+window.addEventListener("keyup", (e)=>{
+  const dir = ARROW_KEY_DIR[e.key];
+  if(!dir) return;
+  if(heldDir === dir) heldDir = null;
+  const btn = document.querySelector(`.dpad [data-dir="${dir}"]`);
+  if(btn) btn.classList.remove("pressed");
+});
+
+/* =========================================================
+   効率化モーダル
+   ========================================================= */
+document.getElementById("btnCloseEff").addEventListener("click", ()=>{
+  document.getElementById("effModal").hidden = true;
+});
+
 /* =========================================================
    設定モーダル
    ========================================================= */
@@ -933,11 +1234,16 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     if(world) npcQueue.forEach(npc=> world.baseGroup.remove(npc.mesh));
     npcQueue = [];
     ensureQueueFilled();
+    transition = null;
+    if(world){ setDoorSwing(world.baseDoor, 0); setDoorSwing(world.forestDoor, 0); }
+    setFade(0);
     document.getElementById("settingsModal").hidden = true;
+    document.getElementById("effModal").hidden = true;
     render();
     syncMapVisibility();
     updatePlayerMesh();
     updateWoodPile();
+    updateBoxPile();
     save();
     toast("データをリセットしました");
   }
