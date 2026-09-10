@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.3.0">
+<meta name="app-version" content="0.4.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -112,47 +112,10 @@
   }
   .section-title:first-child{margin-top:0;}
 
-  /* building cards */
-  .bcard{
-    background:linear-gradient(180deg, var(--card) 0%, #40331f 100%);
-    border:1px solid var(--card-border);
-    border-radius:14px;
-    padding:12px;
-    margin-bottom:10px;
-    box-shadow:var(--shadow);
-  }
-  .bcard.locked{opacity:.55;}
-  .bcard-top{display:flex; align-items:center; gap:10px;}
-  .bcard-icon{
-    width:44px; height:44px; border-radius:10px;
-    background:#2a2115; display:flex; align-items:center; justify-content:center;
-    font-size:22px; flex-shrink:0; border:1px solid #1a140c;
-  }
-  .bcard-info{flex:1; min-width:0;}
-  .bcard-info .name{font-size:14.5px; font-weight:700; color:var(--parchment);}
-  .bcard-info .lv{font-size:11.5px; color:var(--parchment-dim); margin-top:1px;}
-  .bcard-info .prod{font-size:11.5px; color:var(--green); margin-top:1px;}
-  .bcard-lockmsg{font-size:11.5px; color:var(--danger); margin-top:6px;}
-
-  .bcard .prog-wrap{margin-top:9px;}
-  .prog-outer{
-    height:8px; border-radius:5px; background:#241b10; overflow:hidden; border:1px solid #14100a;
-  }
-  .prog-inner{height:100%; background:linear-gradient(90deg, var(--green-dark), var(--green)); width:0%; transition:width .25s linear;}
-  .prog-label{font-size:11px; color:var(--parchment-dim); margin-top:4px; text-align:center;}
-
-  .upg-row{
-    margin-top:9px; display:flex; align-items:center; justify-content:space-between; gap:8px;
-  }
-  .upg-cost{font-size:11px; color:var(--parchment-dim); line-height:1.5;}
-  .upg-cost span{white-space:nowrap; margin-right:6px;}
-  .upg-cost span.bad{color:var(--danger);}
   .btn{
     border:none; border-radius:9px; padding:8px 14px; font-size:12.5px; font-weight:700;
     cursor:pointer; white-space:nowrap; flex-shrink:0;
   }
-  .btn-primary{background:linear-gradient(180deg,#8fce6f,#5d9e46); color:#183212;}
-  .btn-primary:disabled{background:#4a5245; color:#8a9280; cursor:not-allowed;}
   .btn-sub{background:#5a4a30; color:var(--parchment);}
   .btn-sub:disabled{opacity:.4; cursor:not-allowed;}
   .btn-danger{background:linear-gradient(180deg,#e17a68,#b7402f); color:#2b0d08;}
@@ -206,12 +169,13 @@
     opacity:0; transition:opacity .15s ease; pointer-events:none;
   }
   .hud-action.show{opacity:1;}
-  .mgmt-btn{
-    position:absolute; right:8px; bottom:10px;
-    width:38px; height:38px; border-radius:50%;
-    background:linear-gradient(180deg,#8fce6f,#5d9e46); border:none;
-    font-size:17px; box-shadow:var(--shadow); cursor:pointer;
+  .pt-label{
+    position:absolute; transform:translate(-50%,-140%);
+    padding:3px 8px; border-radius:10px; font-size:10.5px; font-weight:700;
+    white-space:nowrap; pointer-events:none; box-shadow:0 2px 4px rgba(0,0,0,.4);
   }
+  .pt-label.dep{ background:#c98a4bdd; color:#2a1a0a; }
+  .pt-label.trd{ background:#f0c245dd; color:#3a2a05; }
 
   .dpad{
     display:grid; grid-template-columns:42px 42px 42px; grid-template-rows:42px 42px 42px;
@@ -227,17 +191,10 @@
   .dpad .dp-right{grid-column:3; grid-row:2;}
   .dpad .dp-down{grid-column:2; grid-row:3;}
 
-  #mgmtBuildingList .bcard:last-child{margin-bottom:0;}
   .panel-empty{
     text-align:center; color:var(--parchment-dim); font-size:12.5px;
     padding:16px 10px; line-height:1.6;
   }
-  .sel-card{position:relative;}
-  .panel-close{
-    position:absolute; top:10px; right:10px; background:none; border:none;
-    color:var(--parchment-dim); font-size:15px; cursor:pointer; padding:4px;
-  }
-  #mgmtModal .modal{max-width:380px; max-height:82vh; overflow-y:auto;}
 
   /* toast */
   #toast{
@@ -321,8 +278,9 @@
           <div class="hud-map" id="hudMapName">🏕️ 拠点</div>
           <div class="hud-carry" id="hudCarry">🪵 運搬中: 0</div>
         </div>
+        <div class="pt-label dep" id="lblDeposit">📦 置き場</div>
+        <div class="pt-label trd" id="lblTrade">💰 売買</div>
         <div class="hud-action" id="hudAction"></div>
-        <button class="mgmt-btn" id="btnMgmt" aria-label="施設管理">🏗️</button>
       </div>
       <div class="dpad">
         <button class="dp-up" data-dir="up" aria-label="上へ">▲</button>
@@ -330,7 +288,7 @@
         <button class="dp-right" data-dir="right" aria-label="右へ">▶</button>
         <button class="dp-down" data-dir="down" aria-label="下へ">▼</button>
       </div>
-      <div class="panel-empty">十字キーでプレイヤーを操作。🏗️ボタンで施設のアップグレードができます。</div>
+      <div class="panel-empty">十字キーでプレイヤーを操作。森で木材を集めてカウンターに運ぼう。</div>
     </div>
 
     <div class="view" id="view-market">
@@ -361,16 +319,6 @@
   </div>
 </div>
 
-<div class="modal-back" id="mgmtModal" hidden>
-  <div class="modal">
-    <h2>🏗️ 施設管理</h2>
-    <div id="mgmtBuildingList"></div>
-    <div class="row" style="margin-top:10px;">
-      <button class="btn btn-sub" id="btnCloseMgmt">閉じる</button>
-    </div>
-  </div>
-</div>
-
 <script>
 (function(){
 "use strict";
@@ -380,59 +328,7 @@
    ========================================================= */
 const SAVE_KEY = "frontierOutpostSave";
 const GAME_VERSION = 1;
-
-const RES = {
-  wood: { name:"木材", icon:"🪵" },
-  food: { name:"食料", icon:"🍖" },
-  gold: { name:"ゴールド", icon:"🪙" }
-};
-
-// 建物定義。costBase/costGrowth でLv毎コスト、timeBase/timeGrowthで建設時間(秒)。
-const BUILDINGS = {
-  townhall: {
-    name:"本拠地", icon:"🏰", produces:null,
-    unlockAt:0,
-    costBase:{wood:80, food:80, gold:0},
-    costGrowth:1.45,
-    timeBase:25, timeGrowth:1.35, timeCap:900,
-    desc:"拠点の中心。他の建物のレベル上限を広げる。"
-  },
-  lumber: {
-    name:"伐採小屋", icon:"🪓", produces:"wood", rateBase:0.12, rateGrowth:1.18,
-    unlockAt:0,
-    costBase:{wood:0, food:40, gold:0},
-    costGrowth:1.4,
-    timeBase:15, timeGrowth:1.3, timeCap:600,
-    desc:"木材を自動で生産する。"
-  },
-  hunting: {
-    name:"狩猟小屋", icon:"🏹", produces:"food", rateBase:0.10, rateGrowth:1.18,
-    unlockAt:0,
-    costBase:{wood:40, food:0, gold:0},
-    costGrowth:1.4,
-    timeBase:15, timeGrowth:1.3, timeCap:600,
-    desc:"食料(肉)を自動で生産する。"
-  },
-  warehouse: {
-    name:"倉庫", icon:"📦", produces:null, capBase:250, capGrowth:1.25,
-    unlockAt:2, // townhall lv2で解放
-    costBase:{wood:60, food:20, gold:0},
-    costGrowth:1.4,
-    timeBase:20, timeGrowth:1.3, timeCap:600,
-    desc:"木材・食料の貯蔵上限を広げる。"
-  },
-  market: {
-    name:"市場", icon:"⚖️", produces:null,
-    unlockAt:2, // townhall lv2で解放
-    costBase:{wood:50, food:50, gold:0},
-    costGrowth:1.4,
-    timeBase:20, timeGrowth:1.3, timeCap:600,
-    desc:"レベルが上がるほど取引の手数料が下がる。"
-  }
-};
-const BUILD_ORDER = ["townhall","lumber","hunting","warehouse","market"];
-
-const BASE_CAP = 300; // 倉庫Lv0でも確保できる最低貯蔵量
+const STORAGE_CAP = 300; // 木材・食料の貯蔵上限(固定値)
 
 /* =========================================================
    状態
@@ -443,15 +339,7 @@ function defaultState(){
   return {
     v: GAME_VERSION,
     resources: { wood:50, food:50, gold:20 },
-    buildings: {
-      townhall:{ level:1, upgrading:null },
-      lumber:{ level:1, upgrading:null },
-      hunting:{ level:1, upgrading:null },
-      warehouse:{ level:0, upgrading:null },
-      market:{ level:0, upgrading:null }
-    },
-    player: { map:"base", x:0, z:5, carryWood:0 },
-    lastTick: Date.now()
+    player: { map:"base", x:0, z:4, carryWood:0 }
   };
 }
 
@@ -461,7 +349,8 @@ function load(){
     if(!raw) return defaultState();
     const parsed = JSON.parse(raw);
     if(!parsed || parsed.v !== GAME_VERSION) return defaultState();
-    if(!parsed.player) parsed.player = { map:"base", x:0, z:5, carryWood:0 }; // 旧セーブ互換
+    if(!parsed.player) parsed.player = { map:"base", x:0, z:4, carryWood:0 }; // 旧セーブ互換
+    if(!parsed.resources) parsed.resources = { wood:50, food:50, gold:20 };
     return parsed;
   }catch(e){
     return defaultState();
@@ -472,130 +361,11 @@ function save(){
     localStorage.setItem(SAVE_KEY, JSON.stringify(state));
   }catch(e){ /* storage disabled (private mode / data: url) - ignore */ }
 }
+function storageCap(){ return STORAGE_CAP; }
 
 /* =========================================================
-   計算ヘルパー
+   アクション(市場タブでの資源売買)
    ========================================================= */
-function townhallLevel(){ return state.buildings.townhall.level; }
-
-function maxLevelFor(id){
-  if(id === "townhall") return 999;
-  return townhallLevel() + 1; // 本拠地Lv+1までしか他建物は上げられない
-}
-
-// unlockAtは「本拠地がこのレベル以上で解放」。まだ建設(Lv0→1)していない建物も一覧には出す。
-function isRevealed(id){
-  const def = BUILDINGS[id];
-  return townhallLevel() >= def.unlockAt;
-}
-
-function storageCap(){
-  const w = state.buildings.warehouse.level;
-  const def = BUILDINGS.warehouse;
-  if(w <= 0) return BASE_CAP;
-  return Math.round(BASE_CAP + def.capBase * Math.pow(def.capGrowth, w-1));
-}
-
-function costForLevel(id, targetLevel){
-  const def = BUILDINGS[id];
-  const factor = Math.pow(def.costGrowth, targetLevel-1);
-  return {
-    wood: Math.round((def.costBase.wood||0) * factor),
-    food: Math.round((def.costBase.food||0) * factor),
-    gold: Math.round((def.costBase.gold||0) * factor)
-  };
-}
-function timeForLevel(id, targetLevel){
-  const def = BUILDINGS[id];
-  const factor = Math.pow(def.timeGrowth, targetLevel-1);
-  return Math.min(def.timeCap, Math.round(def.timeBase * factor));
-}
-function rateForLevel(id, level){
-  const def = BUILDINGS[id];
-  if(!def.produces || level<=0) return 0;
-  return def.rateBase * Math.pow(def.rateGrowth, level-1) * level; // レベルとともに単体効率も微増
-}
-
-/* =========================================================
-   生産・オフライン進行
-   ========================================================= */
-function ratePerSec(resKey){
-  let total = 0;
-  for(const id of BUILD_ORDER){
-    const def = BUILDINGS[id];
-    if(def.produces === resKey){
-      total += rateForLevel(id, state.buildings[id].level);
-    }
-  }
-  return total;
-}
-
-function applyProduction(deltaSec){
-  if(deltaSec <= 0) return;
-  const cap = storageCap();
-  state.resources.wood = Math.min(cap, state.resources.wood + ratePerSec("wood")*deltaSec);
-  state.resources.food = Math.min(cap, state.resources.food + ratePerSec("food")*deltaSec);
-}
-
-function checkUpgradesComplete(now){
-  let changed = false;
-  for(const id of BUILD_ORDER){
-    const b = state.buildings[id];
-    if(b.upgrading && now >= b.upgrading.finishAt){
-      b.level += 1;
-      b.upgrading = null;
-      changed = true;
-      toast(`${BUILDINGS[id].icon} ${BUILDINGS[id].name} が Lv.${b.level} になった!`);
-    }
-  }
-  return changed;
-}
-
-function tick(){
-  const now = Date.now();
-  const deltaSec = Math.max(0, (now - state.lastTick)/1000);
-  applyProduction(deltaSec);
-  checkUpgradesComplete(now);
-  state.lastTick = now;
-  render();
-  save();
-}
-
-function processOfflineProgress(){
-  const now = Date.now();
-  let deltaSec = (now - state.lastTick)/1000;
-  deltaSec = Math.max(0, Math.min(deltaSec, 24*3600)); // オフラインは最大24時間分まで
-  applyProduction(deltaSec);
-  checkUpgradesComplete(now);
-  state.lastTick = now;
-}
-
-/* =========================================================
-   アクション
-   ========================================================= */
-function canAfford(cost){
-  return state.resources.wood >= cost.wood && state.resources.food >= cost.food && state.resources.gold >= cost.gold;
-}
-function spend(cost){
-  state.resources.wood -= cost.wood;
-  state.resources.food -= cost.food;
-  state.resources.gold -= cost.gold;
-}
-
-function startUpgrade(id){
-  const b = state.buildings[id];
-  if(b.upgrading) return;
-  const target = b.level + 1;
-  if(target > maxLevelFor(id)) return;
-  const cost = costForLevel(id, target);
-  if(!canAfford(cost)) return;
-  spend(cost);
-  const time = timeForLevel(id, target);
-  b.upgrading = { finishAt: Date.now() + time*1000, duration: time*1000 };
-  render();
-  save();
-}
-
 function sell(resKey, amount){
   const rate = MARKET_RATES[resKey].sell;
   amount = Math.min(amount, Math.floor(state.resources[resKey]));
@@ -627,26 +397,34 @@ const MARKET_RATES = {
    拠点マップ(3D ワールド)
    ========================================================= */
 // マップ寸法・配置(ワールド座標。1ユニット≒1マス相当)
-const MAP_HALF = 9;                     // 拠点/森マップは一辺18の正方形
-const DOOR_FROM = -1.6, DOOR_TO = 1.6;  // 門(扉)のx範囲
-const COUNTER = { minX:-9, maxX:-7.6, minZ:-2.2, maxZ:2.2 }; // カウンター本体の当たり判定(西の柵に埋め込み)
-const DEPOSIT_PT = { x:-6.6, z:-1.3 };  // 木材を置くポイント(カウンター左)
-const TRADE_PT   = { x:-6.6, z: 1.3 };  // 売買するポイント(カウンター右)
-const INTERACT_RADIUS = 1.5;
-const HARVEST_RADIUS = 1.6;
+// v0.4.0: 移動のストレスを減らすためマップを縮小(一辺18→12)、移動速度も引き上げ
+const MAP_HALF = 6;                     // 拠点/森マップは一辺12の正方形
+const DOOR_FROM = -1.0, DOOR_TO = 1.0;  // 門(扉)のx範囲
+const COUNTER = { minX:-6, maxX:-4.6, minZ:-1.6, maxZ:1.6 }; // カウンター本体の当たり判定(西の柵に埋め込み)
+const DEPOSIT_PT = { x:-3.6, z:-1.2 };  // 木材を置くポイント(カウンター左・固定)
+const TRADE_PT   = { x:-3.6, z: 1.2 };  // 売買するポイント(カウンター右・固定)
+const INTERACT_RADIUS = 1.1;
+const HARVEST_RADIUS = 1.4;
 const HARVEST_SECONDS = 3;              // 木に近づいてから木材化するまでの時間
 const REGROW_SECONDS = 10;              // 伐採後に木が元に戻るまでの時間
 const WOOD_PER_TREE = 3;
-const PLAYER_SPEED = 4.2;               // units/sec
-const SELL_RATE_PER_SEC = 2;            // カウンターでNPCが買い取る木材量(1秒あたり、在庫がある限り)
+const PLAYER_SPEED = 7.5;               // units/sec(v0.3.0の4.2から引き上げ)
+const WOOD_TRANSFER_PER_SEC = 3;        // 売買ポイントでNPCへ木材を渡す速さ(1秒あたり)
+const NPC_BUY_ORDER = 3;                // NPC1人が購入する木材の量
+const TRADE_REWARD_GOLD = 3;            // 1回の売買(NPC1人分)が成立するごとの報酬
+const QUEUE_SIZE = 4;                   // 常に並んでいるNPCの人数
+const PILE_UNIT = 8;                    // カウンター上の木材の山: この量ごとに丸太1本を表示
+const NPC_COLORS = [0xd1594a, 0x4f8fe0, 0x8a6fd4, 0xe0a83f, 0x5cb85c, 0xe07fc0]; // NPCの色分け
 
-const TREE_DEFS = [ {x:-4,z:-3}, {x:4,z:-3}, {x:-4,z:3}, {x:4,z:3} ]; // まずは木を4本
+const TREE_DEFS = [ {x:-2.4,z:-1.8}, {x:2.4,z:-1.8}, {x:-2.4,z:1.8}, {x:2.4,z:1.8} ]; // まずは木を4本
 
 let world = null;           // three.js関連オブジェクト一式(initSceneで構築)
 let trees = TREE_DEFS.map(p => ({ x:p.x, z:p.z, state:"tree", progress:0, stumpUntil:0, mesh:null }));
 let heldDir = null;         // 十字キーで押下中の方向
 let harvestingTreeIdx = -1; // 現在伐採進行中の木(HUD表示用)
-let sellAccum = 0;          // 売却の端数を貯める累積器
+let sellAccum = 0;          // 木材受け渡しの端数を貯める累積器
+let npcQueue = [];          // 購入待ちNPCの列(先頭が現在取引中)
+let npcColorIdx = 0;
 let lastFrameTime = null;
 
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
@@ -684,16 +462,6 @@ function addPad(group, x,z,color){
   mesh.position.set(x, 0.03, z);
   group.add(mesh);
 }
-function addNpcFigure(group, x,z){
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.32,0.9,10), new THREE.MeshStandardMaterial({color:0x6f7f9c}));
-  body.position.y = 0.55;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.26,10,10), new THREE.MeshStandardMaterial({color:0xe8c39e}));
-  head.position.y = 1.15;
-  g.add(body, head);
-  g.position.set(x, 0, z);
-  group.add(g);
-}
 function makeFence(group, color){
   const mat = new THREE.MeshStandardMaterial({ color });
   const southLeftW = DOOR_FROM - (-MAP_HALF), southRightW = MAP_HALF - DOOR_TO;
@@ -708,17 +476,36 @@ function makeFence(group, color){
   addBox(group, postMat, DOOR_FROM, 1.1, MAP_HALF, 0.3, 2.2, 0.3); // 門柱
   addBox(group, postMat, DOOR_TO, 1.1, MAP_HALF, 0.3, 2.2, 0.3);
 }
+function buildWoodPile(group){
+  // カウンター上に積まれる木材の山(木材の量に応じて丸太の本数を出し分ける、updateWoodPileで制御)
+  const cx = (COUNTER.minX + COUNTER.maxX) / 2;
+  const mat = new THREE.MeshStandardMaterial({ color:0xc98a4b });
+  const logs = [];
+  for(let row=0; row<2; row++){
+    for(let i=0; i<5; i++){
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.11,0.11,0.55,8), mat);
+      mesh.rotation.z = Math.PI/2;
+      mesh.position.set(cx-0.6+i*0.3, 1.28+row*0.2, -0.5);
+      mesh.visible = false;
+      group.add(mesh);
+      logs.push(mesh);
+    }
+  }
+  return logs;
+}
 function buildBaseGroup(){
   const group = new THREE.Group();
   addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, MAP_HALF*2, 0.2, MAP_HALF*2); // 地面
   makeFence(group, 0x8a6b3f);
-  addBox(group, new THREE.MeshStandardMaterial({color:0x7a5a34}), -7.8, 0.5, 0, 2.4, 1.0, 4.6);  // カウンター本体
-  addBox(group, new THREE.MeshStandardMaterial({color:0x5c4326}), -7.8, 1.05, 0, 2.6, 0.15, 4.8); // 天板
+  const counterCx = (COUNTER.minX + COUNTER.maxX) / 2;
+  const counterW = COUNTER.maxX - COUNTER.minX;
+  const counterLen = (COUNTER.maxZ - COUNTER.minZ) + 0.4;
+  addBox(group, new THREE.MeshStandardMaterial({color:0x7a5a34}), counterCx, 0.5, 0, counterW, 1.0, counterLen);        // カウンター本体
+  addBox(group, new THREE.MeshStandardMaterial({color:0x5c4326}), counterCx, 1.05, 0, counterW+0.2, 0.15, counterLen+0.2); // 天板
   addPad(group, DEPOSIT_PT.x, DEPOSIT_PT.z, 0xc98a4b); // 木材を置くポイント
   addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント
-  addNpcFigure(group, -10.6, -1.3); // 柵の外で待機するNPC(見た目のみ)
-  addNpcFigure(group, -11.6, -1.3);
-  return group;
+  const pileLogs = buildWoodPile(group);
+  return { group, pileLogs };
 }
 function buildTreeMesh(t){
   const g = new THREE.Group();
@@ -755,6 +542,76 @@ function buildPlayerMesh(){
   return g;
 }
 
+// --- 購入待ちNPCの列(色分け、先頭のみ取引・完了すると消滅して次が繰り上がる) -----
+function nextNpcColor(){
+  const c = NPC_COLORS[npcColorIdx % NPC_COLORS.length];
+  npcColorIdx++;
+  return c;
+}
+function npcSlotPos(i){
+  return { x: COUNTER.minX - 1.2 - i*1.0, z: TRADE_PT.z };
+}
+function buildNpcMesh(color){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.3,0.85,10), new THREE.MeshStandardMaterial({ color }));
+  body.position.y = 0.5;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.24,10,10), new THREE.MeshStandardMaterial({color:0xe8c39e}));
+  head.position.y = 1.05;
+  g.add(body, head);
+  return g;
+}
+function spawnNpc(){
+  const npc = { color: nextNpcColor(), bought: 0, mesh: null };
+  npc.mesh = buildNpcMesh(npc.color);
+  const pos = npcSlotPos(npcQueue.length);
+  npc.mesh.position.set(pos.x, 0, pos.z);
+  npcQueue.push(npc);
+  if(world) world.baseGroup.add(npc.mesh);
+}
+function ensureQueueFilled(){
+  while(npcQueue.length < QUEUE_SIZE) spawnNpc();
+}
+function repositionNpcQueue(){
+  npcQueue.forEach((npc,i)=>{
+    const pos = npcSlotPos(i);
+    npc.mesh.position.set(pos.x, 0, pos.z);
+  });
+}
+function completeFrontNpcPurchase(){
+  const npc = npcQueue.shift();
+  if(npc && npc.mesh && world) world.baseGroup.remove(npc.mesh);
+  state.resources.gold += TRADE_REWARD_GOLD;
+  ensureQueueFilled();
+  repositionNpcQueue();
+  toast(`🤝 取引成立!+${TRADE_REWARD_GOLD}G`);
+}
+function updateWoodPile(){
+  if(!world || !world.pileLogs) return;
+  const count = Math.max(0, Math.min(world.pileLogs.length, Math.round(state.resources.wood / PILE_UNIT)));
+  world.pileLogs.forEach((mesh,i)=>{ mesh.visible = i < count; });
+}
+
+// --- 3D座標→画面座標(ポイントのラベル表示に使用) -------------------------
+function worldToScreen(x,y,z){
+  const v = new THREE.Vector3(x,y,z).project(world.camera);
+  const rect = world.wrap.getBoundingClientRect();
+  return { x:(v.x*0.5+0.5)*rect.width, y:(-v.y*0.5+0.5)*rect.height, behind: v.z>1 };
+}
+function updatePointLabels(){
+  const dep = document.getElementById("lblDeposit");
+  const trd = document.getElementById("lblTrade");
+  if(!world || state.player.map !== "base"){
+    dep.style.display = "none"; trd.style.display = "none";
+    return;
+  }
+  const d = worldToScreen(DEPOSIT_PT.x, 0.5, DEPOSIT_PT.z);
+  const t = worldToScreen(TRADE_PT.x, 0.5, TRADE_PT.z);
+  dep.style.display = d.behind ? "none" : "block";
+  trd.style.display = t.behind ? "none" : "block";
+  dep.style.left = d.x+"px"; dep.style.top = d.y+"px";
+  trd.style.left = t.x+"px"; trd.style.top = t.y+"px";
+}
+
 function initScene(){
   const canvas = document.getElementById("gameCanvas");
   const wrap = document.getElementById("sceneWrap");
@@ -762,23 +619,25 @@ function initScene(){
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0c1a10);
-  const camera = new THREE.PerspectiveCamera(48, 1, 0.1, 100);
+  const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 100);
   scene.add(new THREE.AmbientLight(0xffffff, 0.65));
   const sun = new THREE.DirectionalLight(0xffffff, 0.7);
   sun.position.set(6,10,4);
   scene.add(sun);
 
-  const baseGroup = buildBaseGroup();
+  const baseBuild = buildBaseGroup();
   const forestGroup = buildForestGroup();
-  scene.add(baseGroup, forestGroup);
+  scene.add(baseBuild.group, forestGroup);
   const playerMesh = buildPlayerMesh();
   scene.add(playerMesh);
 
-  world = { renderer, scene, camera, baseGroup, forestGroup, playerMesh, wrap };
+  world = { renderer, scene, camera, baseGroup: baseBuild.group, forestGroup, playerMesh, wrap, pileLogs: baseBuild.pileLogs };
   resizeScene();
   window.addEventListener("resize", resizeScene);
   syncMapVisibility();
   updatePlayerMesh();
+  ensureQueueFilled();
+  updateWoodPile();
   requestAnimationFrame(animate);
 }
 function resizeScene(){
@@ -798,7 +657,7 @@ function syncMapVisibility(){
 function updatePlayerMesh(){
   if(!world) return;
   world.playerMesh.position.set(state.player.x, 0, state.player.z);
-  world.camera.position.set(state.player.x, 9.5, state.player.z + 7.5);
+  world.camera.position.set(state.player.x, 7.0, state.player.z + 6.0);
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 
@@ -809,14 +668,14 @@ function tryMove(dx,dz){
   const nz = clamp(p.z+dz, -MAP_HALF+0.3, MAP_HALF-0.3);
   if(p.map === "base"){
     if(nz > MAP_HALF-0.35 && inDoorGap(nx)){
-      p.map = "forest"; p.x = clamp(nx,-1.5,1.5); p.z = -MAP_HALF+0.6;
+      p.map = "forest"; p.x = clamp(nx,-0.9,0.9); p.z = -MAP_HALF+0.6;
       syncMapVisibility(); toast("🌲 森に入った"); save(); return;
     }
     if(!blockedInBase(nx, p.z)) p.x = nx;
     if(!blockedInBase(p.x, nz)) p.z = nz;
   } else {
     if(nz < -MAP_HALF+0.35 && inDoorGap(nx)){
-      p.map = "base"; p.x = clamp(nx,-1.5,1.5); p.z = MAP_HALF-0.6;
+      p.map = "base"; p.x = clamp(nx,-0.9,0.9); p.z = MAP_HALF-0.6;
       syncMapVisibility(); toast("🏕️ 拠点に戻った"); save(); return;
     }
     if(!blockedInForest(nx, p.z)) p.x = nx;
@@ -856,30 +715,47 @@ function updateForestInteraction(dt){
 // --- 拠点: 木材カウンター ---------------------------------------------
 function updateBaseInteraction(dt){
   const p = state.player;
+
+  // 置き場: 運搬中の木材をカウンターに積む(見た目にも山として積まれる)
   if(p.carryWood > 0 && distTo(DEPOSIT_PT.x,DEPOSIT_PT.z,p.x,p.z) <= INTERACT_RADIUS){
     const room = Math.max(0, storageCap() - state.resources.wood);
     const move = Math.min(p.carryWood, room);
     if(move > 0){
       state.resources.wood += move; p.carryWood -= move;
-      renderResBar(); updateHud(); save();
+      renderResBar(); updateHud(); updateWoodPile(); save();
       toast(`📦 木材${move}をカウンターに置いた`);
     } else {
-      toast("倉庫が満杯で置けない");
+      toast("カウンターがいっぱいで置けない");
     }
   }
-  if(distTo(TRADE_PT.x,TRADE_PT.z,p.x,p.z) <= INTERACT_RADIUS && state.resources.wood > 0){
-    sellAccum += SELL_RATE_PER_SEC*dt;
-    const units = Math.floor(sellAccum + 1e-9); // 浮動小数の誤差で端数が1未満に張り付くのを防ぐ
-    if(units > 0){
-      const actual = Math.min(units, Math.floor(state.resources.wood));
-      sellAccum -= units;
-      if(actual > 0){
-        state.resources.wood -= actual;
-        state.resources.gold += actual * MARKET_RATES.wood.sell; // 端数を丸めない(小口取引の連続でゴールドが消えないように)
-        renderResBar(); save();
+
+  // 売買ポイント: 先頭のNPCに木材を渡し続け、3個で1回の取引が成立
+  if(distTo(TRADE_PT.x,TRADE_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    ensureQueueFilled();
+    if(state.resources.wood > 0 && npcQueue.length > 0){
+      sellAccum += WOOD_TRANSFER_PER_SEC*dt;
+      let units = Math.floor(sellAccum + 1e-9); // 浮動小数の誤差で端数が1未満に張り付くのを防ぐ
+      if(units > 0) sellAccum -= units;
+      let changed = false;
+      while(units > 0 && npcQueue.length > 0 && state.resources.wood > 0){
+        const front = npcQueue[0];
+        const room = NPC_BUY_ORDER - front.bought;
+        const take = Math.min(units, room, Math.floor(state.resources.wood));
+        if(take <= 0) break;
+        state.resources.wood -= take;
+        front.bought += take;
+        units -= take;
+        changed = true;
+        if(front.bought >= NPC_BUY_ORDER) completeFrontNpcPurchase();
       }
+      if(changed){ renderResBar(); updateWoodPile(); save(); }
+      const front = npcQueue[0];
+      showAction(front ? `💰 お客さんへ渡し中… ${front.bought}/${NPC_BUY_ORDER}` : "お客さんを待っています…");
+    } else if(npcQueue.length === 0){
+      showAction("お客さんを待っています…");
+    } else {
+      showAction("木材の在庫がありません");
     }
-    showAction("💰 NPCに木材を売却中…");
   } else {
     sellAccum = 0;
     if(state.player.map === "base") hideAction();
@@ -923,6 +799,7 @@ function animate(ts){
   else updateBaseInteraction(dt);
   updateHud();
   updatePlayerMesh();
+  updatePointLabels();
   world.renderer.render(world.scene, world.camera);
 }
 
@@ -953,93 +830,8 @@ function renderResBar(){
   document.getElementById("resFoodFill").style.width = Math.min(100, state.resources.food/cap*100)+"%";
 }
 
-// 建物1件分のカード中身(拠点パネルで使う)
-function buildingCardInner(id){
-  const def = BUILDINGS[id];
-  const b = state.buildings[id];
-  const now = Date.now();
-  const target = b.level + 1;
-  const atCap = target > maxLevelFor(id);
-  const cost = !atCap ? costForLevel(id, target) : null;
-  const time = !atCap ? timeForLevel(id, target) : null;
-
-  let prodLine = "";
-  if(def.produces){
-    const rate = rateForLevel(id, b.level);
-    prodLine = `<div class="prod">${RES[def.produces].icon} +${rate.toFixed(2)}/秒</div>`;
-  } else if(id === "warehouse"){
-    prodLine = `<div class="prod">貯蔵上限 ${fmt(storageCap())}</div>`;
-  } else if(id === "market"){
-    prodLine = `<div class="prod">手数料 ${Math.max(0, 15 - b.level*2)}%引き</div>`;
-  } else if(id === "townhall"){
-    prodLine = `<div class="prod">他施設の上限 Lv.${maxLevelFor("lumber")}</div>`;
-  }
-
-  let bottom = "";
-  if(b.upgrading){
-    const remain = b.upgrading.finishAt - now;
-    const pct = 100 - Math.max(0, Math.min(100, remain / b.upgrading.duration * 100));
-    bottom = `<div class="prog-wrap">
-      <div class="prog-outer"><div class="prog-inner" style="width:${pct}%"></div></div>
-      <div class="prog-label">建設中… 残り ${fmtTime(remain)}</div>
-    </div>`;
-  } else if(atCap){
-    bottom = `<div class="upg-row">
-      <div class="upg-cost bad">本拠地を先にLvアップしてください</div>
-      <button class="btn btn-sub" disabled>上限</button>
-    </div>`;
-  } else {
-    const afford = canAfford(cost);
-    const costParts = [];
-    if(cost.wood) costParts.push(`<span class="${state.resources.wood<cost.wood?'bad':''}">🪵${fmt(cost.wood)}</span>`);
-    if(cost.food) costParts.push(`<span class="${state.resources.food<cost.food?'bad':''}">🍖${fmt(cost.food)}</span>`);
-    if(cost.gold) costParts.push(`<span class="${state.resources.gold<cost.gold?'bad':''}">🪙${fmt(cost.gold)}</span>`);
-    bottom = `<div class="upg-row">
-      <div class="upg-cost">${costParts.join("")}<br>⏱ ${fmtTime(time*1000)}</div>
-      <button class="btn btn-primary" data-upg="${id}" ${afford?"":"disabled"}>Lv.${target}へ</button>
-    </div>`;
-  }
-
-  return `<div class="bcard-top">
-      <div class="bcard-icon">${def.icon}</div>
-      <div class="bcard-info">
-        <div class="name">${def.name}</div>
-        <div class="lv">Lv.${b.level}${id!=="townhall" ? " / "+maxLevelFor(id) : ""}</div>
-        ${prodLine}
-      </div>
-    </div>
-    ${bottom}`;
-}
-
-// 施設管理モーダルの建物一覧(拠点マップから🏗️ボタンで開く)
-function renderMgmtList(){
-  const wrap = document.getElementById("mgmtBuildingList");
-  if(!wrap) return;
-  let html = "";
-  for(const id of BUILD_ORDER){
-    if(!isRevealed(id)){
-      html += `<div class="bcard locked"><div class="bcard-top">
-        <div class="bcard-icon">🔒</div>
-        <div class="bcard-info"><div class="name">???</div>
-        <div class="lv">本拠地 Lv.${BUILDINGS[id].unlockAt} で解放</div></div>
-      </div></div>`;
-      continue;
-    }
-    html += `<div class="bcard">${buildingCardInner(id)}</div>`;
-  }
-  wrap.innerHTML = html;
-  wrap.querySelectorAll("[data-upg]").forEach(btn=>{
-    btn.addEventListener("click", ()=> startUpgrade(btn.getAttribute("data-upg")));
-  });
-}
-
 function renderMarket(){
   const wrap = document.getElementById("marketArea");
-  const marketLv = state.buildings.market.level;
-  if(marketLv <= 0){
-    wrap.innerHTML = `<div class="locked-note">⚖️ 市場が未建設です<br>拠点タブで「市場」を建設すると<br>資源の売買ができるようになります。</div>`;
-    return;
-  }
   wrap.innerHTML = `
     <div class="mcard">
       <div class="mcard-head"><span class="ic">🪵</span><span class="t">木材を売買</span>
@@ -1082,7 +874,6 @@ function renderMarket(){
 
 function render(){
   renderResBar();
-  renderMgmtList();
   renderMarket();
 }
 
@@ -1124,17 +915,6 @@ document.querySelectorAll(".dpad [data-dir]").forEach(btn=>{
 });
 
 /* =========================================================
-   施設管理モーダル
-   ========================================================= */
-document.getElementById("btnMgmt").addEventListener("click", ()=>{
-  renderMgmtList();
-  document.getElementById("mgmtModal").hidden = false;
-});
-document.getElementById("btnCloseMgmt").addEventListener("click", ()=>{
-  document.getElementById("mgmtModal").hidden = true;
-});
-
-/* =========================================================
    設定モーダル
    ========================================================= */
 document.getElementById("btnSettings").addEventListener("click", ()=>{
@@ -1149,10 +929,15 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     state = defaultState();
     trees.forEach(t=>{ t.state="tree"; t.progress=0; t.stumpUntil=0; setTreeVisual(t); });
     harvestingTreeIdx = -1;
+    sellAccum = 0;
+    if(world) npcQueue.forEach(npc=> world.baseGroup.remove(npc.mesh));
+    npcQueue = [];
+    ensureQueueFilled();
     document.getElementById("settingsModal").hidden = true;
     render();
     syncMapVisibility();
     updatePlayerMesh();
+    updateWoodPile();
     save();
     toast("データをリセットしました");
   }
@@ -1164,16 +949,14 @@ document.getElementById("verNum").textContent =
    起動
    ========================================================= */
 state = load();
-processOfflineProgress();
 render();
 initScene();
 save();
-setInterval(tick, 1000);
+setInterval(save, 5000); // 定期オートセーブ(移動中の座標なども取りこぼさないように)
 
-// タブを再表示した時にもオフライン分を反映
+// タブを再表示した時にも表示を最新化
 document.addEventListener("visibilitychange", ()=>{
   if(document.visibilityState === "visible"){
-    processOfflineProgress();
     render();
     save();
   }
