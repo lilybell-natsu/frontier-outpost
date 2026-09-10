@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2b3a2a">
+<meta name="app-version" content="0.1.0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="開拓記">
+<title>フロンティア開拓記</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --bg-1:#1c2a1c;
+    --bg-2:#2b3a2a;
+    --panel:#33291f;
+    --panel-2:#3d3122;
+    --card:#4a3b28;
+    --card-border:#6b5638;
+    --parchment:#e9dcbb;
+    --parchment-dim:#c9bb94;
+    --wood:#c98a4b;
+    --food:#e0725a;
+    --gold:#f0c245;
+    --green:#7cb662;
+    --green-dark:#4c8a3a;
+    --danger:#d1594a;
+    --shadow: 0 4px 10px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family:"Hiragino Sans","Yu Gothic","Meiryo",system-ui,sans-serif;
+    background:
+      radial-gradient(circle at 50% -10%, #35492f 0%, var(--bg-1) 55%, #131d13 100%);
+    color:var(--parchment);
+    overscroll-behavior:none;
+    user-select:none;
+  }
+  #app{
+    max-width:480px;
+    margin:0 auto;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* ---------- Header / resource bar ---------- */
+  header{
+    position:sticky; top:0; z-index:10;
+    padding:10px 10px 8px;
+    padding-top:calc(10px + env(safe-area-inset-top));
+    background:linear-gradient(180deg, #24331f 0%, #1c2a1c 100%);
+    border-bottom:1px solid #0d150d;
+    box-shadow:var(--shadow);
+  }
+  .titlebar{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:8px;
+  }
+  .titlebar h1{
+    font-size:15px; margin:0; letter-spacing:.05em; color:var(--parchment);
+    display:flex; align-items:center; gap:6px;
+  }
+  .gear-btn{
+    background:none; border:none; color:var(--parchment-dim);
+    font-size:18px; padding:4px 6px; cursor:pointer; line-height:1;
+  }
+  .res-bar{
+    display:flex; gap:6px;
+  }
+  .res-chip{
+    flex:1;
+    background:var(--panel);
+    border:1px solid var(--card-border);
+    border-radius:10px;
+    padding:5px 6px;
+    display:flex; align-items:center; gap:5px;
+    min-width:0;
+  }
+  .res-chip .ic{font-size:16px;}
+  .res-chip .num{
+    font-size:12.5px; font-weight:600; color:var(--parchment);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .res-chip .num small{color:var(--parchment-dim); font-weight:400;}
+  .res-chip.gold .num{color:var(--gold);}
+  .res-fill{
+    height:3px; border-radius:2px; margin-top:3px; background:#00000055; overflow:hidden;
+  }
+  .res-fill i{display:block; height:100%; background:var(--green); transition:width .3s;}
+  .res-chip.food .res-fill i{background:var(--food);}
+  .res-chip.wood .res-fill i{background:var(--wood);}
+
+  /* ---------- Main / views ---------- */
+  main{flex:1; padding:12px 10px 90px; overflow-y:auto;}
+  .view{display:none;}
+  .view.active{display:block; animation:fadein .18s ease;}
+  @keyframes fadein{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;}}
+
+  .section-title{
+    font-size:12.5px; color:var(--parchment-dim); margin:14px 2px 8px;
+    letter-spacing:.08em; text-transform:uppercase;
+  }
+  .section-title:first-child{margin-top:0;}
+
+  /* building cards */
+  .bcard{
+    background:linear-gradient(180deg, var(--card) 0%, #40331f 100%);
+    border:1px solid var(--card-border);
+    border-radius:14px;
+    padding:12px;
+    margin-bottom:10px;
+    box-shadow:var(--shadow);
+  }
+  .bcard.locked{opacity:.55;}
+  .bcard-top{display:flex; align-items:center; gap:10px;}
+  .bcard-icon{
+    width:44px; height:44px; border-radius:10px;
+    background:#2a2115; display:flex; align-items:center; justify-content:center;
+    font-size:22px; flex-shrink:0; border:1px solid #1a140c;
+  }
+  .bcard-info{flex:1; min-width:0;}
+  .bcard-info .name{font-size:14.5px; font-weight:700; color:var(--parchment);}
+  .bcard-info .lv{font-size:11.5px; color:var(--parchment-dim); margin-top:1px;}
+  .bcard-info .prod{font-size:11.5px; color:var(--green); margin-top:1px;}
+  .bcard-lockmsg{font-size:11.5px; color:var(--danger); margin-top:6px;}
+
+  .bcard .prog-wrap{margin-top:9px;}
+  .prog-outer{
+    height:8px; border-radius:5px; background:#241b10; overflow:hidden; border:1px solid #14100a;
+  }
+  .prog-inner{height:100%; background:linear-gradient(90deg, var(--green-dark), var(--green)); width:0%; transition:width .25s linear;}
+  .prog-label{font-size:11px; color:var(--parchment-dim); margin-top:4px; text-align:center;}
+
+  .upg-row{
+    margin-top:9px; display:flex; align-items:center; justify-content:space-between; gap:8px;
+  }
+  .upg-cost{font-size:11px; color:var(--parchment-dim); line-height:1.5;}
+  .upg-cost span{white-space:nowrap; margin-right:6px;}
+  .upg-cost span.bad{color:var(--danger);}
+  .btn{
+    border:none; border-radius:9px; padding:8px 14px; font-size:12.5px; font-weight:700;
+    cursor:pointer; white-space:nowrap; flex-shrink:0;
+  }
+  .btn-primary{background:linear-gradient(180deg,#8fce6f,#5d9e46); color:#183212;}
+  .btn-primary:disabled{background:#4a5245; color:#8a9280; cursor:not-allowed;}
+  .btn-sub{background:#5a4a30; color:var(--parchment);}
+  .btn-sub:disabled{opacity:.4; cursor:not-allowed;}
+  .btn-danger{background:linear-gradient(180deg,#e17a68,#b7402f); color:#2b0d08;}
+
+  /* market */
+  .mcard{
+    background:linear-gradient(180deg, var(--panel-2) 0%, #2a2116 100%);
+    border:1px solid var(--card-border);
+    border-radius:14px;
+    padding:12px;
+    margin-bottom:12px;
+    box-shadow:var(--shadow);
+  }
+  .mcard-head{display:flex; align-items:center; gap:8px; margin-bottom:8px;}
+  .mcard-head .ic{font-size:20px;}
+  .mcard-head .t{font-size:14px; font-weight:700;}
+  .mcard-head .rate{margin-left:auto; font-size:11px; color:var(--parchment-dim);}
+  .trade-btns{display:flex; gap:6px; flex-wrap:wrap;}
+  .trade-btns .btn{flex:1; min-width:64px;}
+  .mcard .sub-label{font-size:11px; color:var(--parchment-dim); margin:8px 0 4px;}
+
+  .locked-note{
+    text-align:center; color:var(--parchment-dim); font-size:12.5px;
+    padding:30px 10px; line-height:1.7;
+  }
+
+  /* toast */
+  #toast{
+    position:fixed; left:50%; bottom:86px; transform:translate(-50%, 12px);
+    background:#000000cc; color:var(--parchment); padding:8px 16px; border-radius:20px;
+    font-size:12.5px; opacity:0; pointer-events:none; transition:all .25s ease; z-index:50;
+    max-width:80%; text-align:center;
+  }
+  #toast.show{opacity:1; transform:translate(-50%, 0);}
+
+  /* bottom nav */
+  nav{
+    position:fixed; left:0; right:0; bottom:0; z-index:10;
+    max-width:480px; margin:0 auto;
+    display:flex;
+    background:linear-gradient(180deg, #24331f 0%, #1a271a 100%);
+    border-top:1px solid #0d150d;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav button{
+    flex:1; background:none; border:none; color:var(--parchment-dim);
+    display:flex; flex-direction:column; align-items:center; gap:2px;
+    padding:9px 0 8px; font-size:10.5px; cursor:pointer;
+  }
+  nav button .ic{font-size:20px;}
+  nav button.active{color:var(--gold);}
+
+  /* modal */
+  .modal-back{
+    position:fixed; inset:0; background:#000000aa; z-index:100;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-back[hidden]{display:none;}
+  .modal{
+    background:var(--panel); border:1px solid var(--card-border); border-radius:14px;
+    padding:18px; width:100%; max-width:340px; box-shadow:var(--shadow);
+  }
+  .modal h2{margin:0 0 10px; font-size:15px;}
+  .modal p{font-size:12.5px; color:var(--parchment-dim); line-height:1.7; margin:0 0 14px;}
+  .modal .row{display:flex; gap:8px; justify-content:flex-end;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="titlebar">
+      <h1>🏕️ フロンティア開拓記</h1>
+      <button class="gear-btn" id="btnSettings" aria-label="設定">⚙️</button>
+    </div>
+    <div class="res-bar">
+      <div class="res-chip wood">
+        <div class="ic">🪵</div>
+        <div style="flex:1;min-width:0;">
+          <div class="num" id="resWoodNum">0 / 0</div>
+          <div class="res-fill"><i id="resWoodFill" style="width:0%"></i></div>
+        </div>
+      </div>
+      <div class="res-chip food">
+        <div class="ic">🍖</div>
+        <div style="flex:1;min-width:0;">
+          <div class="num" id="resFoodNum">0 / 0</div>
+          <div class="res-fill"><i id="resFoodFill" style="width:0%"></i></div>
+        </div>
+      </div>
+      <div class="res-chip gold">
+        <div class="ic">🪙</div>
+        <div style="flex:1;min-width:0;">
+          <div class="num" id="resGoldNum">0</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="view active" id="view-base">
+      <div class="section-title">拠点</div>
+      <div id="buildingList"></div>
+    </div>
+
+    <div class="view" id="view-market">
+      <div class="section-title">市場</div>
+      <div id="marketArea"></div>
+    </div>
+  </main>
+
+  <div id="toast"></div>
+
+  <nav>
+    <button class="nav-btn active" data-view="view-base"><span class="ic">🏕️</span>拠点</button>
+    <button class="nav-btn" data-view="view-market"><span class="ic">⚖️</span>市場</button>
+  </nav>
+</div>
+
+<div class="modal-back" id="settingsModal" hidden>
+  <div class="modal">
+    <h2>⚙️ 設定</h2>
+    <p>
+      フロンティア開拓記 v<span id="verNum">0.1.0</span><br>
+      データはこの端末のブラウザ内にのみ保存されます。
+    </p>
+    <div class="row">
+      <button class="btn btn-danger" id="btnReset">データをリセット</button>
+      <button class="btn btn-sub" id="btnCloseSettings">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* =========================================================
+   定義データ(バランス値は試作段階の仮値)
+   ========================================================= */
+const SAVE_KEY = "frontierOutpostSave";
+const GAME_VERSION = 1;
+
+const RES = {
+  wood: { name:"木材", icon:"🪵" },
+  food: { name:"食料", icon:"🍖" },
+  gold: { name:"ゴールド", icon:"🪙" }
+};
+
+// 建物定義。costBase/costGrowth でLv毎コスト、timeBase/timeGrowthで建設時間(秒)。
+const BUILDINGS = {
+  townhall: {
+    name:"本拠地", icon:"🏰", produces:null,
+    unlockAt:0,
+    costBase:{wood:80, food:80, gold:0},
+    costGrowth:1.45,
+    timeBase:25, timeGrowth:1.35, timeCap:900,
+    desc:"拠点の中心。他の建物のレベル上限を広げる。"
+  },
+  lumber: {
+    name:"伐採小屋", icon:"🪓", produces:"wood", rateBase:0.12, rateGrowth:1.18,
+    unlockAt:0,
+    costBase:{wood:0, food:40, gold:0},
+    costGrowth:1.4,
+    timeBase:15, timeGrowth:1.3, timeCap:600,
+    desc:"木材を自動で生産する。"
+  },
+  hunting: {
+    name:"狩猟小屋", icon:"🏹", produces:"food", rateBase:0.10, rateGrowth:1.18,
+    unlockAt:0,
+    costBase:{wood:40, food:0, gold:0},
+    costGrowth:1.4,
+    timeBase:15, timeGrowth:1.3, timeCap:600,
+    desc:"食料(肉)を自動で生産する。"
+  },
+  warehouse: {
+    name:"倉庫", icon:"📦", produces:null, capBase:250, capGrowth:1.25,
+    unlockAt:2, // townhall lv2で解放
+    costBase:{wood:60, food:20, gold:0},
+    costGrowth:1.4,
+    timeBase:20, timeGrowth:1.3, timeCap:600,
+    desc:"木材・食料の貯蔵上限を広げる。"
+  },
+  market: {
+    name:"市場", icon:"⚖️", produces:null,
+    unlockAt:2, // townhall lv2で解放
+    costBase:{wood:50, food:50, gold:0},
+    costGrowth:1.4,
+    timeBase:20, timeGrowth:1.3, timeCap:600,
+    desc:"レベルが上がるほど取引の手数料が下がる。"
+  }
+};
+const BUILD_ORDER = ["townhall","lumber","hunting","warehouse","market"];
+
+const BASE_CAP = 300; // 倉庫Lv0でも確保できる最低貯蔵量
+
+/* =========================================================
+   状態
+   ========================================================= */
+let state = null;
+
+function defaultState(){
+  return {
+    v: GAME_VERSION,
+    resources: { wood:50, food:50, gold:20 },
+    buildings: {
+      townhall:{ level:1, upgrading:null },
+      lumber:{ level:1, upgrading:null },
+      hunting:{ level:1, upgrading:null },
+      warehouse:{ level:0, upgrading:null },
+      market:{ level:0, upgrading:null }
+    },
+    lastTick: Date.now()
+  };
+}
+
+function load(){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY);
+    if(!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    if(!parsed || parsed.v !== GAME_VERSION) return defaultState();
+    return parsed;
+  }catch(e){
+    return defaultState();
+  }
+}
+function save(){
+  try{
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  }catch(e){ /* storage disabled (private mode / data: url) - ignore */ }
+}
+
+/* =========================================================
+   計算ヘルパー
+   ========================================================= */
+function townhallLevel(){ return state.buildings.townhall.level; }
+
+function maxLevelFor(id){
+  if(id === "townhall") return 999;
+  return townhallLevel() + 1; // 本拠地Lv+1までしか他建物は上げられない
+}
+
+// unlockAtは「本拠地がこのレベル以上で解放」。まだ建設(Lv0→1)していない建物も一覧には出す。
+function isRevealed(id){
+  const def = BUILDINGS[id];
+  return townhallLevel() >= def.unlockAt;
+}
+
+function storageCap(){
+  const w = state.buildings.warehouse.level;
+  const def = BUILDINGS.warehouse;
+  if(w <= 0) return BASE_CAP;
+  return Math.round(BASE_CAP + def.capBase * Math.pow(def.capGrowth, w-1));
+}
+
+function costForLevel(id, targetLevel){
+  const def = BUILDINGS[id];
+  const factor = Math.pow(def.costGrowth, targetLevel-1);
+  return {
+    wood: Math.round((def.costBase.wood||0) * factor),
+    food: Math.round((def.costBase.food||0) * factor),
+    gold: Math.round((def.costBase.gold||0) * factor)
+  };
+}
+function timeForLevel(id, targetLevel){
+  const def = BUILDINGS[id];
+  const factor = Math.pow(def.timeGrowth, targetLevel-1);
+  return Math.min(def.timeCap, Math.round(def.timeBase * factor));
+}
+function rateForLevel(id, level){
+  const def = BUILDINGS[id];
+  if(!def.produces || level<=0) return 0;
+  return def.rateBase * Math.pow(def.rateGrowth, level-1) * level; // レベルとともに単体効率も微増
+}
+
+/* =========================================================
+   生産・オフライン進行
+   ========================================================= */
+function ratePerSec(resKey){
+  let total = 0;
+  for(const id of BUILD_ORDER){
+    const def = BUILDINGS[id];
+    if(def.produces === resKey){
+      total += rateForLevel(id, state.buildings[id].level);
+    }
+  }
+  return total;
+}
+
+function applyProduction(deltaSec){
+  if(deltaSec <= 0) return;
+  const cap = storageCap();
+  state.resources.wood = Math.min(cap, state.resources.wood + ratePerSec("wood")*deltaSec);
+  state.resources.food = Math.min(cap, state.resources.food + ratePerSec("food")*deltaSec);
+}
+
+function checkUpgradesComplete(now){
+  let changed = false;
+  for(const id of BUILD_ORDER){
+    const b = state.buildings[id];
+    if(b.upgrading && now >= b.upgrading.finishAt){
+      b.level += 1;
+      b.upgrading = null;
+      changed = true;
+      toast(`${BUILDINGS[id].icon} ${BUILDINGS[id].name} が Lv.${b.level} になった!`);
+    }
+  }
+  return changed;
+}
+
+function tick(){
+  const now = Date.now();
+  const deltaSec = Math.max(0, (now - state.lastTick)/1000);
+  applyProduction(deltaSec);
+  checkUpgradesComplete(now);
+  state.lastTick = now;
+  render();
+  save();
+}
+
+function processOfflineProgress(){
+  const now = Date.now();
+  let deltaSec = (now - state.lastTick)/1000;
+  deltaSec = Math.max(0, Math.min(deltaSec, 24*3600)); // オフラインは最大24時間分まで
+  applyProduction(deltaSec);
+  checkUpgradesComplete(now);
+  state.lastTick = now;
+}
+
+/* =========================================================
+   アクション
+   ========================================================= */
+function canAfford(cost){
+  return state.resources.wood >= cost.wood && state.resources.food >= cost.food && state.resources.gold >= cost.gold;
+}
+function spend(cost){
+  state.resources.wood -= cost.wood;
+  state.resources.food -= cost.food;
+  state.resources.gold -= cost.gold;
+}
+
+function startUpgrade(id){
+  const b = state.buildings[id];
+  if(b.upgrading) return;
+  const target = b.level + 1;
+  if(target > maxLevelFor(id)) return;
+  const cost = costForLevel(id, target);
+  if(!canAfford(cost)) return;
+  spend(cost);
+  const time = timeForLevel(id, target);
+  b.upgrading = { finishAt: Date.now() + time*1000, duration: time*1000 };
+  render();
+  save();
+}
+
+function sell(resKey, amount){
+  const rate = MARKET_RATES[resKey].sell;
+  amount = Math.min(amount, Math.floor(state.resources[resKey]));
+  if(amount <= 0) return;
+  state.resources[resKey] -= amount;
+  state.resources.gold += Math.round(amount * rate);
+  render(); save();
+}
+function buy(resKey, amount){
+  const rate = MARKET_RATES[resKey].buy;
+  const cost = Math.ceil(amount * rate);
+  if(state.resources.gold < cost) { toast("ゴールドが足りない"); return; }
+  const cap = storageCap();
+  const room = cap - state.resources[resKey];
+  if(room <= 0){ toast("倉庫が満杯"); return; }
+  const actualAmount = Math.min(amount, room);
+  const actualCost = Math.ceil(actualAmount * rate);
+  state.resources.gold -= actualCost;
+  state.resources[resKey] += actualAmount;
+  render(); save();
+}
+
+const MARKET_RATES = {
+  wood: { sell:0.28, buy:0.55 },
+  food: { sell:0.35, buy:0.65 }
+};
+
+/* =========================================================
+   描画
+   ========================================================= */
+function fmt(n){
+  n = Math.floor(n);
+  if(n >= 100000) return (n/1000).toFixed(1)+"k";
+  return n.toLocaleString("ja-JP");
+}
+function fmtTime(ms){
+  const s = Math.max(0, Math.ceil(ms/1000));
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  const sec = s%60;
+  if(h>0) return `${h}時間${m}分`;
+  if(m>0) return `${m}分${sec}秒`;
+  return `${sec}秒`;
+}
+
+function renderResBar(){
+  const cap = storageCap();
+  document.getElementById("resWoodNum").textContent = `${fmt(state.resources.wood)} / ${fmt(cap)}`;
+  document.getElementById("resFoodNum").textContent = `${fmt(state.resources.food)} / ${fmt(cap)}`;
+  document.getElementById("resGoldNum").textContent = fmt(state.resources.gold);
+  document.getElementById("resWoodFill").style.width = Math.min(100, state.resources.wood/cap*100)+"%";
+  document.getElementById("resFoodFill").style.width = Math.min(100, state.resources.food/cap*100)+"%";
+}
+
+function renderBuildings(){
+  const wrap = document.getElementById("buildingList");
+  const now = Date.now();
+  let html = "";
+  for(const id of BUILD_ORDER){
+    const def = BUILDINGS[id];
+    const b = state.buildings[id];
+    const revealed = isRevealed(id);
+    if(!revealed){
+      html += `<div class="bcard locked"><div class="bcard-top">
+        <div class="bcard-icon">🔒</div>
+        <div class="bcard-info"><div class="name">???</div>
+        <div class="lv">本拠地 Lv.${def.unlockAt} で解放</div></div>
+      </div></div>`;
+      continue;
+    }
+    const target = b.level + 1;
+    const atCap = target > maxLevelFor(id);
+    const cost = !atCap ? costForLevel(id, target) : null;
+    const time = !atCap ? timeForLevel(id, target) : null;
+
+    let prodLine = "";
+    if(def.produces){
+      const rate = rateForLevel(id, b.level);
+      prodLine = `<div class="prod">${RES[def.produces].icon} +${rate.toFixed(2)}/秒</div>`;
+    } else if(id === "warehouse"){
+      prodLine = `<div class="prod">貯蔵上限 ${fmt(storageCap())}</div>`;
+    } else if(id === "market"){
+      prodLine = `<div class="prod">手数料 ${Math.max(0, 15 - b.level*2)}%引き</div>`;
+    } else if(id === "townhall"){
+      prodLine = `<div class="prod">他施設の上限 Lv.${maxLevelFor("lumber")}</div>`;
+    }
+
+    let bottom = "";
+    if(b.upgrading){
+      const remain = b.upgrading.finishAt - now;
+      const pct = 100 - Math.max(0, Math.min(100, remain / b.upgrading.duration * 100));
+      bottom = `<div class="prog-wrap">
+        <div class="prog-outer"><div class="prog-inner" style="width:${pct}%"></div></div>
+        <div class="prog-label">建設中… 残り ${fmtTime(remain)}</div>
+      </div>`;
+    } else if(atCap){
+      bottom = `<div class="upg-row">
+        <div class="upg-cost bad">本拠地を先にLvアップしてください</div>
+        <button class="btn btn-sub" disabled>上限</button>
+      </div>`;
+    } else {
+      const afford = canAfford(cost);
+      const costParts = [];
+      if(cost.wood) costParts.push(`<span class="${state.resources.wood<cost.wood?'bad':''}">🪵${fmt(cost.wood)}</span>`);
+      if(cost.food) costParts.push(`<span class="${state.resources.food<cost.food?'bad':''}">🍖${fmt(cost.food)}</span>`);
+      if(cost.gold) costParts.push(`<span class="${state.resources.gold<cost.gold?'bad':''}">🪙${fmt(cost.gold)}</span>`);
+      bottom = `<div class="upg-row">
+        <div class="upg-cost">${costParts.join("")}<br>⏱ ${fmtTime(time*1000)}</div>
+        <button class="btn btn-primary" data-upg="${id}" ${afford?"":"disabled"}>Lv.${target}へ</button>
+      </div>`;
+    }
+
+    html += `<div class="bcard">
+      <div class="bcard-top">
+        <div class="bcard-icon">${def.icon}</div>
+        <div class="bcard-info">
+          <div class="name">${def.name}</div>
+          <div class="lv">Lv.${b.level}${id!=="townhall" ? " / "+maxLevelFor(id) : ""}</div>
+          ${prodLine}
+        </div>
+      </div>
+      ${bottom}
+    </div>`;
+  }
+  wrap.innerHTML = html;
+
+  wrap.querySelectorAll("[data-upg]").forEach(btn=>{
+    btn.addEventListener("click", ()=> startUpgrade(btn.getAttribute("data-upg")));
+  });
+}
+
+function renderMarket(){
+  const wrap = document.getElementById("marketArea");
+  const marketLv = state.buildings.market.level;
+  if(marketLv <= 0){
+    wrap.innerHTML = `<div class="locked-note">⚖️ 市場が未建設です<br>拠点タブで「市場」を建設すると<br>資源の売買ができるようになります。</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <div class="mcard">
+      <div class="mcard-head"><span class="ic">🪵</span><span class="t">木材を売買</span>
+        <span class="rate">売${MARKET_RATES.wood.sell}/買${MARKET_RATES.wood.buy} 🪙</span></div>
+      <div class="sub-label">売る</div>
+      <div class="trade-btns">
+        <button class="btn btn-sub" data-sell="wood" data-amt="10">10個</button>
+        <button class="btn btn-sub" data-sell="wood" data-amt="50">50個</button>
+        <button class="btn btn-sub" data-sell="wood" data-amt="99999">全部</button>
+      </div>
+      <div class="sub-label">買う</div>
+      <div class="trade-btns">
+        <button class="btn btn-sub" data-buy="wood" data-amt="10">10個</button>
+        <button class="btn btn-sub" data-buy="wood" data-amt="50">50個</button>
+      </div>
+    </div>
+    <div class="mcard">
+      <div class="mcard-head"><span class="ic">🍖</span><span class="t">食料を売買</span>
+        <span class="rate">売${MARKET_RATES.food.sell}/買${MARKET_RATES.food.buy} 🪙</span></div>
+      <div class="sub-label">売る</div>
+      <div class="trade-btns">
+        <button class="btn btn-sub" data-sell="food" data-amt="10">10個</button>
+        <button class="btn btn-sub" data-sell="food" data-amt="50">50個</button>
+        <button class="btn btn-sub" data-sell="food" data-amt="99999">全部</button>
+      </div>
+      <div class="sub-label">買う</div>
+      <div class="trade-btns">
+        <button class="btn btn-sub" data-buy="food" data-amt="10">10個</button>
+        <button class="btn btn-sub" data-buy="food" data-amt="50">50個</button>
+      </div>
+    </div>
+  `;
+  wrap.querySelectorAll("[data-sell]").forEach(btn=>{
+    btn.addEventListener("click", ()=> sell(btn.getAttribute("data-sell"), parseInt(btn.getAttribute("data-amt"),10)));
+  });
+  wrap.querySelectorAll("[data-buy]").forEach(btn=>{
+    btn.addEventListener("click", ()=> buy(btn.getAttribute("data-buy"), parseInt(btn.getAttribute("data-amt"),10)));
+  });
+}
+
+function render(){
+  renderResBar();
+  renderBuildings();
+  renderMarket();
+}
+
+/* =========================================================
+   トースト
+   ========================================================= */
+let toastTimer = null;
+function toast(msg){
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> el.classList.remove("show"), 2200);
+}
+
+/* =========================================================
+   タブ切替
+   ========================================================= */
+document.querySelectorAll(".nav-btn").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    document.querySelectorAll(".nav-btn").forEach(b=>b.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(btn.getAttribute("data-view")).classList.add("active");
+  });
+});
+
+/* =========================================================
+   設定モーダル
+   ========================================================= */
+document.getElementById("btnSettings").addEventListener("click", ()=>{
+  document.getElementById("settingsModal").hidden = false;
+});
+document.getElementById("btnCloseSettings").addEventListener("click", ()=>{
+  document.getElementById("settingsModal").hidden = true;
+});
+document.getElementById("btnReset").addEventListener("click", ()=>{
+  if(confirm("本当にすべてのデータをリセットしますか?この操作は元に戻せません。")){
+    localStorage.removeItem(SAVE_KEY);
+    state = defaultState();
+    document.getElementById("settingsModal").hidden = true;
+    render();
+    save();
+    toast("データをリセットしました");
+  }
+});
+document.getElementById("verNum").textContent =
+  document.querySelector('meta[name="app-version"]').content;
+
+/* =========================================================
+   起動
+   ========================================================= */
+state = load();
+processOfflineProgress();
+render();
+save();
+setInterval(tick, 1000);
+
+// タブを再表示した時にもオフライン分を反映
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState === "visible"){
+    processOfflineProgress();
+    render();
+    save();
+  }
+});
+
+// Service Worker登録(失敗しても無視)
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  });
+}
+
+})();
+</script>
+</body>
+</html>
