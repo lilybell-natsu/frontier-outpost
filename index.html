@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.1.0">
+<meta name="app-version" content="0.2.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -178,6 +178,66 @@
     padding:30px 10px; line-height:1.7;
   }
 
+  /* ---------- 拠点マップ ---------- */
+  .base-map-wrap{display:flex; flex-direction:column; align-items:center;}
+  .base-map{
+    position:relative; border-radius:12px; overflow:hidden;
+    border:2px solid #2f4a22; box-shadow:var(--shadow);
+    background:#6b9c48;
+    touch-action:none;
+  }
+  .tile{
+    position:absolute; box-sizing:border-box;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    border:1px solid rgba(0,0,0,.08);
+    font-size:20px; user-select:none;
+  }
+  .tile-ground{background:#6b9c48; cursor:pointer;}
+  .tile-ground.g2{background:#63924199;}
+  .tile-tree{background:#6b9c48; font-size:24px; cursor:default;}
+  .tile-locked{background:#332c20; color:#8d8368; font-size:20px; cursor:pointer;}
+  .tile-building{
+    background:linear-gradient(180deg,#8a6b3f,#6f552f);
+    border:2px solid #43331b; cursor:pointer; gap:1px;
+  }
+  .tile-building.sel{outline:3px solid var(--gold); outline-offset:-3px;}
+  .tile-building .t-icon{font-size:20px; line-height:1;}
+  .tile-building .t-lv{
+    font-size:8.5px; color:#fff; background:#00000066; padding:0 4px; border-radius:5px; line-height:1.4;
+  }
+  .t-badge{position:absolute; top:-5px; right:-5px; font-size:13px;}
+  .player{
+    position:absolute; display:flex; align-items:center; justify-content:center;
+    font-size:22px; z-index:5; pointer-events:none;
+    transition:left .15s linear, top .15s linear;
+    filter:drop-shadow(0 2px 2px rgba(0,0,0,.6));
+  }
+
+  .dpad{
+    display:grid; grid-template-columns:42px 42px 42px; grid-template-rows:42px 42px 42px;
+    gap:4px; margin:12px 0 4px;
+  }
+  .dpad button{
+    background:var(--panel-2); border:1px solid var(--card-border); border-radius:8px;
+    color:var(--parchment); font-size:15px; cursor:pointer;
+  }
+  .dpad button:active{background:var(--card);}
+  .dpad .dp-up{grid-column:2; grid-row:1;}
+  .dpad .dp-left{grid-column:1; grid-row:2;}
+  .dpad .dp-right{grid-column:3; grid-row:2;}
+  .dpad .dp-down{grid-column:2; grid-row:3;}
+
+  #buildingPanel{margin-top:14px;}
+  .panel-empty{
+    text-align:center; color:var(--parchment-dim); font-size:12.5px;
+    padding:16px 10px; line-height:1.6;
+  }
+  .sel-card{position:relative;}
+  .panel-close{
+    position:absolute; top:10px; right:10px; background:none; border:none;
+    color:var(--parchment-dim); font-size:15px; cursor:pointer; padding:4px;
+  }
+
   /* toast */
   #toast{
     position:fixed; left:50%; bottom:86px; transform:translate(-50%, 12px);
@@ -254,7 +314,19 @@
   <main>
     <div class="view active" id="view-base">
       <div class="section-title">拠点</div>
-      <div id="buildingList"></div>
+      <div class="base-map-wrap">
+        <div class="base-map" id="baseMap">
+          <div id="tilesLayer"></div>
+          <div class="player" id="player">🧑</div>
+        </div>
+        <div class="dpad">
+          <button class="dp-up" data-dir="up" aria-label="上へ">▲</button>
+          <button class="dp-left" data-dir="left" aria-label="左へ">◀</button>
+          <button class="dp-right" data-dir="right" aria-label="右へ">▶</button>
+          <button class="dp-down" data-dir="down" aria-label="下へ">▼</button>
+        </div>
+      </div>
+      <div id="buildingPanel"></div>
     </div>
 
     <div class="view" id="view-market">
@@ -347,6 +419,112 @@ const BUILDINGS = {
 const BUILD_ORDER = ["townhall","lumber","hunting","warehouse","market"];
 
 const BASE_CAP = 300; // 倉庫Lv0でも確保できる最低貯蔵量
+
+/* =========================================================
+   拠点マップ(グリッド配置・プレイヤー操作)
+   ========================================================= */
+const GRID_COLS = 6, GRID_ROWS = 6, TILE = 56;
+// 建物の設置位置 [row, col]
+const BUILD_POS = {
+  townhall: [2,2],
+  lumber:   [1,1],
+  hunting:  [1,4],
+  warehouse:[4,1],
+  market:   [4,4]
+};
+// 見た目だけの障害物(木)
+const TREES = [[0,0],[0,5],[5,0],[5,5],[3,5]];
+
+function posKey(r,c){ return r+","+c; }
+const BUILD_POS_MAP = {};
+for(const id in BUILD_POS){ BUILD_POS_MAP[posKey(BUILD_POS[id][0], BUILD_POS[id][1])] = id; }
+const TREE_SET = new Set(TREES.map(([r,c])=>posKey(r,c)));
+
+let player = { r:3, c:3 };
+let isWalking = false;
+let selectedBuilding = null;
+
+function buildingAt(r,c){ return BUILD_POS_MAP[posKey(r,c)] || null; }
+function isWalkable(r,c){
+  if(r<0||c<0||r>=GRID_ROWS||c>=GRID_COLS) return false;
+  if(buildingAt(r,c)) return false;
+  if(TREE_SET.has(posKey(r,c))) return false;
+  return true;
+}
+function neighborsOf(r,c){ return [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]; }
+function nearestWalkableAdjacent(r,c){
+  for(const [nr,nc] of neighborsOf(r,c)){
+    if(isWalkable(nr,nc)) return [nr,nc];
+  }
+  return null;
+}
+// 6x6の小さなグリッド上でのBFS最短経路探索
+function bfsPath(start, end){
+  const startK = posKey(start[0],start[1]);
+  if(startK === posKey(end[0],end[1])) return [];
+  const visited = new Set([startK]);
+  const queue = [[start]];
+  while(queue.length){
+    const path = queue.shift();
+    const [r,c] = path[path.length-1];
+    for(const [nr,nc] of neighborsOf(r,c)){
+      const k = posKey(nr,nc);
+      if(visited.has(k) || !isWalkable(nr,nc)) continue;
+      const newPath = path.concat([[nr,nc]]);
+      if(nr===end[0] && nc===end[1]) return newPath.slice(1);
+      visited.add(k);
+      queue.push(newPath);
+    }
+  }
+  return null;
+}
+function updatePlayerPosition(){
+  const el = document.getElementById("player");
+  if(!el) return;
+  el.style.left = (player.c*TILE)+"px";
+  el.style.top = (player.r*TILE)+"px";
+}
+async function walkTo(r,c){
+  if(isWalking) return;
+  if(player.r===r && player.c===c) return;
+  const path = bfsPath([player.r,player.c],[r,c]);
+  if(!path || path.length===0) return;
+  isWalking = true;
+  for(const [nr,nc] of path){
+    player.r = nr; player.c = nc;
+    updatePlayerPosition();
+    await new Promise(res=>setTimeout(res,150));
+  }
+  isWalking = false;
+}
+function onTileTap(r,c){
+  const bId = buildingAt(r,c);
+  if(bId){
+    if(!isRevealed(bId)){
+      toast(`🔒 本拠地 Lv.${BUILDINGS[bId].unlockAt} で解放`);
+      return;
+    }
+    selectedBuilding = bId;
+    renderBuildingPanel();
+    const adj = nearestWalkableAdjacent(r,c);
+    if(adj) walkTo(adj[0], adj[1]);
+    return;
+  }
+  if(TREE_SET.has(posKey(r,c))){
+    toast("🌲 木があって通れない");
+    return;
+  }
+  walkTo(r,c);
+}
+function movePlayerDir(dir){
+  if(isWalking) return;
+  let {r,c} = player;
+  if(dir==="up") r--;
+  else if(dir==="down") r++;
+  else if(dir==="left") c--;
+  else if(dir==="right") c++;
+  if(isWalkable(r,c)) walkTo(r,c);
+}
 
 /* =========================================================
    状態
@@ -562,80 +740,120 @@ function renderResBar(){
   document.getElementById("resFoodFill").style.width = Math.min(100, state.resources.food/cap*100)+"%";
 }
 
-function renderBuildings(){
-  const wrap = document.getElementById("buildingList");
+// 建物1件分のカード中身(拠点パネルで使う)
+function buildingCardInner(id){
+  const def = BUILDINGS[id];
+  const b = state.buildings[id];
   const now = Date.now();
-  let html = "";
-  for(const id of BUILD_ORDER){
-    const def = BUILDINGS[id];
-    const b = state.buildings[id];
-    const revealed = isRevealed(id);
-    if(!revealed){
-      html += `<div class="bcard locked"><div class="bcard-top">
-        <div class="bcard-icon">🔒</div>
-        <div class="bcard-info"><div class="name">???</div>
-        <div class="lv">本拠地 Lv.${def.unlockAt} で解放</div></div>
-      </div></div>`;
-      continue;
-    }
-    const target = b.level + 1;
-    const atCap = target > maxLevelFor(id);
-    const cost = !atCap ? costForLevel(id, target) : null;
-    const time = !atCap ? timeForLevel(id, target) : null;
+  const target = b.level + 1;
+  const atCap = target > maxLevelFor(id);
+  const cost = !atCap ? costForLevel(id, target) : null;
+  const time = !atCap ? timeForLevel(id, target) : null;
 
-    let prodLine = "";
-    if(def.produces){
-      const rate = rateForLevel(id, b.level);
-      prodLine = `<div class="prod">${RES[def.produces].icon} +${rate.toFixed(2)}/秒</div>`;
-    } else if(id === "warehouse"){
-      prodLine = `<div class="prod">貯蔵上限 ${fmt(storageCap())}</div>`;
-    } else if(id === "market"){
-      prodLine = `<div class="prod">手数料 ${Math.max(0, 15 - b.level*2)}%引き</div>`;
-    } else if(id === "townhall"){
-      prodLine = `<div class="prod">他施設の上限 Lv.${maxLevelFor("lumber")}</div>`;
-    }
+  let prodLine = "";
+  if(def.produces){
+    const rate = rateForLevel(id, b.level);
+    prodLine = `<div class="prod">${RES[def.produces].icon} +${rate.toFixed(2)}/秒</div>`;
+  } else if(id === "warehouse"){
+    prodLine = `<div class="prod">貯蔵上限 ${fmt(storageCap())}</div>`;
+  } else if(id === "market"){
+    prodLine = `<div class="prod">手数料 ${Math.max(0, 15 - b.level*2)}%引き</div>`;
+  } else if(id === "townhall"){
+    prodLine = `<div class="prod">他施設の上限 Lv.${maxLevelFor("lumber")}</div>`;
+  }
 
-    let bottom = "";
-    if(b.upgrading){
-      const remain = b.upgrading.finishAt - now;
-      const pct = 100 - Math.max(0, Math.min(100, remain / b.upgrading.duration * 100));
-      bottom = `<div class="prog-wrap">
-        <div class="prog-outer"><div class="prog-inner" style="width:${pct}%"></div></div>
-        <div class="prog-label">建設中… 残り ${fmtTime(remain)}</div>
-      </div>`;
-    } else if(atCap){
-      bottom = `<div class="upg-row">
-        <div class="upg-cost bad">本拠地を先にLvアップしてください</div>
-        <button class="btn btn-sub" disabled>上限</button>
-      </div>`;
-    } else {
-      const afford = canAfford(cost);
-      const costParts = [];
-      if(cost.wood) costParts.push(`<span class="${state.resources.wood<cost.wood?'bad':''}">🪵${fmt(cost.wood)}</span>`);
-      if(cost.food) costParts.push(`<span class="${state.resources.food<cost.food?'bad':''}">🍖${fmt(cost.food)}</span>`);
-      if(cost.gold) costParts.push(`<span class="${state.resources.gold<cost.gold?'bad':''}">🪙${fmt(cost.gold)}</span>`);
-      bottom = `<div class="upg-row">
-        <div class="upg-cost">${costParts.join("")}<br>⏱ ${fmtTime(time*1000)}</div>
-        <button class="btn btn-primary" data-upg="${id}" ${afford?"":"disabled"}>Lv.${target}へ</button>
-      </div>`;
-    }
-
-    html += `<div class="bcard">
-      <div class="bcard-top">
-        <div class="bcard-icon">${def.icon}</div>
-        <div class="bcard-info">
-          <div class="name">${def.name}</div>
-          <div class="lv">Lv.${b.level}${id!=="townhall" ? " / "+maxLevelFor(id) : ""}</div>
-          ${prodLine}
-        </div>
-      </div>
-      ${bottom}
+  let bottom = "";
+  if(b.upgrading){
+    const remain = b.upgrading.finishAt - now;
+    const pct = 100 - Math.max(0, Math.min(100, remain / b.upgrading.duration * 100));
+    bottom = `<div class="prog-wrap">
+      <div class="prog-outer"><div class="prog-inner" style="width:${pct}%"></div></div>
+      <div class="prog-label">建設中… 残り ${fmtTime(remain)}</div>
+    </div>`;
+  } else if(atCap){
+    bottom = `<div class="upg-row">
+      <div class="upg-cost bad">本拠地を先にLvアップしてください</div>
+      <button class="btn btn-sub" disabled>上限</button>
+    </div>`;
+  } else {
+    const afford = canAfford(cost);
+    const costParts = [];
+    if(cost.wood) costParts.push(`<span class="${state.resources.wood<cost.wood?'bad':''}">🪵${fmt(cost.wood)}</span>`);
+    if(cost.food) costParts.push(`<span class="${state.resources.food<cost.food?'bad':''}">🍖${fmt(cost.food)}</span>`);
+    if(cost.gold) costParts.push(`<span class="${state.resources.gold<cost.gold?'bad':''}">🪙${fmt(cost.gold)}</span>`);
+    bottom = `<div class="upg-row">
+      <div class="upg-cost">${costParts.join("")}<br>⏱ ${fmtTime(time*1000)}</div>
+      <button class="btn btn-primary" data-upg="${id}" ${afford?"":"disabled"}>Lv.${target}へ</button>
     </div>`;
   }
-  wrap.innerHTML = html;
 
-  wrap.querySelectorAll("[data-upg]").forEach(btn=>{
-    btn.addEventListener("click", ()=> startUpgrade(btn.getAttribute("data-upg")));
+  return `<div class="bcard-top">
+      <div class="bcard-icon">${def.icon}</div>
+      <div class="bcard-info">
+        <div class="name">${def.name}</div>
+        <div class="lv">Lv.${b.level}${id!=="townhall" ? " / "+maxLevelFor(id) : ""}</div>
+        ${prodLine}
+      </div>
+    </div>
+    ${bottom}`;
+}
+
+function renderMap(){
+  const wrap = document.getElementById("tilesLayer");
+  document.getElementById("baseMap").style.width = (GRID_COLS*TILE)+"px";
+  document.getElementById("baseMap").style.height = (GRID_ROWS*TILE)+"px";
+  let html = "";
+  for(let r=0; r<GRID_ROWS; r++){
+    for(let c=0; c<GRID_COLS; c++){
+      const style = `left:${c*TILE}px;top:${r*TILE}px;width:${TILE}px;height:${TILE}px;`;
+      const bId = buildingAt(r,c);
+      if(bId){
+        const def = BUILDINGS[bId];
+        if(!isRevealed(bId)){
+          html += `<div class="tile tile-locked" style="${style}" data-tap="${r},${c}">🔒</div>`;
+        } else {
+          const b = state.buildings[bId];
+          const sel = selectedBuilding===bId ? " sel" : "";
+          html += `<div class="tile tile-building${sel}" style="${style}" data-tap="${r},${c}">
+            <div class="t-icon">${def.icon}</div>
+            <div class="t-lv">Lv.${b.level}</div>
+            ${b.upgrading ? '<div class="t-badge">🔨</div>' : ''}
+          </div>`;
+        }
+      } else if(TREE_SET.has(posKey(r,c))){
+        html += `<div class="tile tile-tree" style="${style}">🌲</div>`;
+      } else {
+        const g2 = (r+c)%2===0 ? " g2" : "";
+        html += `<div class="tile tile-ground${g2}" style="${style}" data-tap="${r},${c}"></div>`;
+      }
+    }
+  }
+  wrap.innerHTML = html;
+  wrap.querySelectorAll("[data-tap]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const [r,c] = el.getAttribute("data-tap").split(",").map(Number);
+      onTileTap(r,c);
+    });
+  });
+}
+
+function renderBuildingPanel(){
+  const wrap = document.getElementById("buildingPanel");
+  if(!selectedBuilding || !isRevealed(selectedBuilding)){
+    selectedBuilding = null;
+    wrap.innerHTML = `<div class="panel-empty">👆 建物をタップすると詳細とアップグレードが見られます</div>`;
+    return;
+  }
+  const id = selectedBuilding;
+  wrap.innerHTML = `<div class="bcard sel-card">
+    <button class="panel-close" id="panelClose" aria-label="閉じる">✕</button>
+    ${buildingCardInner(id)}
+  </div>`;
+  const upgBtn = wrap.querySelector("[data-upg]");
+  if(upgBtn) upgBtn.addEventListener("click", ()=> startUpgrade(upgBtn.getAttribute("data-upg")));
+  document.getElementById("panelClose").addEventListener("click", ()=>{
+    selectedBuilding = null;
+    renderBuildingPanel();
   });
 }
 
@@ -688,7 +906,8 @@ function renderMarket(){
 
 function render(){
   renderResBar();
-  renderBuildings();
+  renderMap();
+  renderBuildingPanel();
   renderMarket();
 }
 
@@ -717,6 +936,13 @@ document.querySelectorAll(".nav-btn").forEach(btn=>{
 });
 
 /* =========================================================
+   十字キー(拠点マップのプレイヤー移動)
+   ========================================================= */
+document.querySelectorAll(".dpad [data-dir]").forEach(btn=>{
+  btn.addEventListener("click", ()=> movePlayerDir(btn.getAttribute("data-dir")));
+});
+
+/* =========================================================
    設定モーダル
    ========================================================= */
 document.getElementById("btnSettings").addEventListener("click", ()=>{
@@ -729,8 +955,11 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
   if(confirm("本当にすべてのデータをリセットしますか?この操作は元に戻せません。")){
     localStorage.removeItem(SAVE_KEY);
     state = defaultState();
+    selectedBuilding = null;
+    player = { r:3, c:3 };
     document.getElementById("settingsModal").hidden = true;
     render();
+    updatePlayerPosition();
     save();
     toast("データをリセットしました");
   }
@@ -744,6 +973,7 @@ document.getElementById("verNum").textContent =
 state = load();
 processOfflineProgress();
 render();
+updatePlayerPosition();
 save();
 setInterval(tick, 1000);
 
