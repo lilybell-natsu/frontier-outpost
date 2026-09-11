@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.18.0">
+<meta name="app-version" content="0.19.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -150,13 +150,6 @@
     opacity:0; transition:opacity .15s ease; pointer-events:none;
   }
   .hud-action.show{opacity:1;}
-  .pt-label{
-    position:absolute; transform:translate(-50%,-140%);
-    padding:3px 8px; border-radius:10px; font-size:10.5px; font-weight:700;
-    white-space:nowrap; pointer-events:none; box-shadow:0 2px 4px rgba(0,0,0,.4);
-  }
-  .pt-label.dep{ background:#c98a4bdd; color:#2a1a0a; }
-  .pt-label.trd{ background:#f0c245dd; color:#3a2a05; }
 
   .dpad{
     position:absolute; left:8px; bottom:8px; z-index:6;
@@ -172,19 +165,6 @@
   .dpad .dp-left{grid-column:1; grid-row:2;}
   .dpad .dp-right{grid-column:3; grid-row:2;}
   .dpad .dp-down{grid-column:2; grid-row:3;}
-
-  .ctx-btn{
-    position:absolute; right:8px; bottom:8px; z-index:6;
-    background:linear-gradient(180deg,#f0c245,#c9982a); color:#3a2a05;
-    border:none; border-radius:20px; padding:9px 14px; font-size:12px; font-weight:700;
-    box-shadow:var(--shadow); cursor:pointer;
-  }
-  .ctx-btn[hidden]{display:none;}
-
-  .panel-empty{
-    text-align:center; color:var(--parchment-dim); font-size:12.5px;
-    padding:16px 10px; line-height:1.6;
-  }
 
   .eff-row{
     display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -258,10 +238,7 @@
             <div class="hud-gold" id="hudGold">🪙 0</div>
           </div>
         </div>
-        <div class="pt-label dep" id="lblDeposit">📦 置き場</div>
-        <div class="pt-label trd" id="lblTrade">💰 売買</div>
         <div class="hud-action" id="hudAction"></div>
-        <button class="ctx-btn" id="ctxBtn" hidden></button>
         <div class="dpad">
           <button class="dp-up" data-dir="up" aria-label="上へ">▲</button>
           <button class="dp-left" data-dir="left" aria-label="左へ">◀</button>
@@ -269,7 +246,16 @@
           <button class="dp-down" data-dir="down" aria-label="下へ">▼</button>
         </div>
       </div>
-      <div class="panel-empty">十字キー(PCは矢印キーも可)でプレイヤーを操作。森で木材を集めてカウンターに運ぼう。</div>
+    </div>
+
+    <div class="view" id="view-eff">
+      <div class="section-title">🛠️ 効率化</div>
+      <div id="effList"></div>
+    </div>
+
+    <div class="view" id="view-hire">
+      <div class="section-title">👷 雇用</div>
+      <div id="npcHireList"></div>
     </div>
 
     <div class="view" id="view-market">
@@ -282,6 +268,8 @@
 
   <nav>
     <button class="nav-btn active" data-view="view-base"><span class="ic">🏕️</span>拠点</button>
+    <button class="nav-btn" data-view="view-eff"><span class="ic">🛠️</span>効率化</button>
+    <button class="nav-btn" data-view="view-hire"><span class="ic">👷</span>雇用</button>
     <button class="nav-btn" data-view="view-market"><span class="ic">⚖️</span>市場</button>
   </nav>
 </div>
@@ -296,26 +284,6 @@
     <div class="row">
       <button class="btn btn-danger" id="btnReset">データをリセット</button>
       <button class="btn btn-sub" id="btnCloseSettings">閉じる</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-back" id="effModal" hidden>
-  <div class="modal">
-    <h2>🛠️ 効率化</h2>
-    <div id="effList"></div>
-    <div class="row" style="margin-top:10px;">
-      <button class="btn btn-sub" id="btnCloseEff">閉じる</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-back" id="npcModal" hidden>
-  <div class="modal">
-    <h2>👷 NPCカウンター</h2>
-    <div id="npcHireList"></div>
-    <div class="row" style="margin-top:10px;">
-      <button class="btn btn-sub" id="btnCloseNpc">閉じる</button>
     </div>
   </div>
 </div>
@@ -527,8 +495,7 @@ function tradeLaneZ(i){ return COUNTER_Z_FROM + 1 + i*TRADE_LANE_GAP; } // レ�
 function tradeLaneTradePt(i){ return { x: BASE_MIN_X, z: tradeLaneZ(i) }; }
 function tradeLaneNpcPos(i){ return { x: BASE_MIN_X+1, z: tradeLaneZ(i) }; } // 自動化NPCの立ち位置(カウンター内側)
 const TRADE_PT         = tradeLaneTradePt(0); // レーン0=プレイヤー用の売買するポイント(既存名を維持)
-const NPC_COUNTER_PT   = { x:BASE_MAX_X-1, z:-2 }; // NPCエリア(伐採NPC・売買NPCを統一して雇用、床のみ・通行可)
-const EFF_COUNTER_PT   = { x:BASE_MAX_X-1, z: 2 }; // 効率化エリア(床のみ・通行可)
+const NPC_COUNTER_PT   = { x:BASE_MAX_X-1, z:-2 }; // 雇用NPCの初期スポーン地点(雇用は「雇用」タブから行う。エリア歩行はなし)
 const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 
 // 客NPCの待機エリア(拠点の外、西側。土の広場)。縦方向は拠点と同じ幅まで拡張し、
@@ -570,8 +537,6 @@ let npcQueues = Array.from({length: TRADE_LANE_MAX}, () => []);
 let npcColorIdx = 0;
 let lastFrameTime = null;
 let doorSwing = 0;          // 扉の開き具合(0=閉,1=開)。プレイヤーが近づくと自動で開閉する(演出のみ、移動はブロックしない)
-let activeModal = null;     // "eff" | "npc" | null (キーボード操作の対象になっているモーダル)
-let modalSelIndex = 0;      // モーダル内の選択インデックス(矢印キーで移動)
 let exitingNpcs = [];       // 取引完了後、退場アニメーション中の客NPC(右へ2マス→列の後方側へ1マスずつ、待機エリア外で消滅)
 
 function distTo(x,z,px,pz){ const dx=x-px, dz=z-pz; return Math.sqrt(dx*dx+dz*dz); }
@@ -660,10 +625,6 @@ function setDoorSwing(door, p){
   door.leftPivot.rotation.y = -p * Math.PI * 0.5;
   door.rightPivot.rotation.y = p * Math.PI * 0.5;
 }
-function buildNpcArea(group){
-  // NPCエリア(拠点)。建物は置かず、床のエリア表示のみ。ここに来ると伐採NPC・売買NPCを統一して雇用できる
-  addPad(group, NPC_COUNTER_PT.x, NPC_COUNTER_PT.z, 0xe0a83f);
-}
 // 雇用NPC(伐採・売買)の簡素なパーツ構成。色で種別を区別する
 function buildWorkerMesh(color){
   const g = new THREE.Group();
@@ -727,10 +688,6 @@ function updateHarvestWorkerVisuals(){
     }
   });
 }
-function buildEfficiencyArea(group){
-  // 効率化エリア(拠点)。建物は置かず、床のエリア表示のみ。ここに来ると効率化の強化フォームを選択できる
-  addPad(group, EFF_COUNTER_PT.x, EFF_COUNTER_PT.z, 0x4f8fe0);
-}
 // 丸太3本を束ねた「1セット」の見た目(木材3個=1セットとして積む)
 function buildLogBundle(mat){
   const g = new THREE.Group();
@@ -770,6 +727,50 @@ function buildWoodCounter(group){
   addPad(group, DEPOSIT_PT.x, DEPOSIT_PT.z, 0xc98a4b); // 木材を置くポイント
   addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント(レーン0)
   return buildLogPileAt(group, WOOD_COUNTER_X, DEPOSIT_PT.z, 1.28, 10);
+}
+// --- エリアに表示するマーク(旧: 画面固定のポップアップ表示をやめ、3D空間上のスプライトに置き換えた) ---
+// canvasに描いた絵文字/テキストをテクスチャ化し、billboard(常にカメラを向く)のスプライトとして配置する
+function buildMarkSprite(w, h){
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const texture = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.renderOrder = 999; // 木や柵の裏に隠れないよう最前面に描画する
+  sprite.userData.canvas = canvas;
+  sprite.userData.ctx = ctx;
+  sprite.userData.texture = texture;
+  return sprite;
+}
+// 固定の絵文字マーク(売買ポイントなど、内容が変化しない場所用)
+function buildStaticMarkSprite(emoji){
+  const sprite = buildMarkSprite(96, 96);
+  const ctx = sprite.userData.ctx;
+  ctx.font = "64px sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(emoji, 48, 52);
+  sprite.userData.texture.needsUpdate = true;
+  sprite.scale.set(0.8, 0.8, 1);
+  return sprite;
+}
+// 木材の置き場マーク: アイコンに加え、現在カウンターに置かれている木材の数を表示する(値が変わるたびに再描画)
+function buildDepositMarkSprite(){
+  const sprite = buildMarkSprite(180, 96);
+  sprite.scale.set(1.5, 0.8, 1);
+  return sprite;
+}
+function updateDepositMarkSprite(sprite){
+  const canvas = sprite.userData.canvas, ctx = sprite.userData.ctx;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "48px sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("📦", 40, 52);
+  ctx.font = "bold 34px sans-serif";
+  ctx.fillStyle = "#f3e6c8";
+  ctx.textAlign = "left";
+  ctx.fillText(fmt(state.resources.wood), 74, 54);
+  sprite.userData.texture.needsUpdate = true;
 }
 // 木の造形: 旧デザインは葉(コーン)の下端(y=0.8)がプレイヤー/NPCの頭部(y〜0.9〜1.5)と近距離で
 // 重なり、深度バッファの奪い合い(z-fighting)で一時的に消えて見えることがあった。
@@ -961,6 +962,7 @@ function updateWoodPile(){
   if(!world || !world.pileLogs) return;
   const count = Math.max(0, Math.min(world.pileLogs.length, Math.round(state.resources.wood / PILE_UNIT)));
   world.pileLogs.forEach((mesh,i)=>{ mesh.visible = i < count; });
+  if(world.depositMark) updateDepositMarkSprite(world.depositMark);
 }
 // 雇用NPC(伐採・売買)の見た目をstate.harvestWorkers/state.sellWorkersと同期させる
 // (雇用/失効のたびに呼び出す。個体数は少ないので毎回作り直す簡易実装)
@@ -1105,26 +1107,6 @@ function updateAutomationVisuals(now){
   });
 }
 
-// --- 3D座標→画面座標(ポイントのラベル表示に使用) -------------------------
-function worldToScreen(x,y,z){
-  const v = new THREE.Vector3(x,y,z).project(world.camera);
-  const rect = world.wrap.getBoundingClientRect();
-  return { x:(v.x*0.5+0.5)*rect.width, y:(-v.y*0.5+0.5)*rect.height, behind: v.z>1 };
-}
-function updatePointLabels(){
-  const dep = document.getElementById("lblDeposit");
-  const trd = document.getElementById("lblTrade");
-  if(!world){
-    dep.style.display = "none"; trd.style.display = "none";
-    return;
-  }
-  const d = worldToScreen(DEPOSIT_PT.x, 0.5, DEPOSIT_PT.z);
-  const t = worldToScreen(TRADE_PT.x, 0.5, TRADE_PT.z);
-  dep.style.display = d.behind ? "none" : "block";
-  trd.style.display = t.behind ? "none" : "block";
-  dep.style.left = d.x+"px"; dep.style.top = d.y+"px";
-  trd.style.left = t.x+"px"; trd.style.top = t.y+"px";
-}
 
 function initScene(){
   const canvas = document.getElementById("gameCanvas");
@@ -1143,8 +1125,12 @@ function initScene(){
   buildGround(group);
   buildFence(group);
   const pileLogs = buildWoodCounter(group);
-  buildEfficiencyArea(group);
-  buildNpcArea(group);
+  const depositMark = buildDepositMarkSprite();
+  depositMark.position.set(DEPOSIT_PT.x, 1.0, DEPOSIT_PT.z);
+  group.add(depositMark);
+  const tradeMark = buildStaticMarkSprite("💰");
+  tradeMark.position.set(TRADE_PT.x, 1.0, TRADE_PT.z);
+  group.add(tradeMark);
   const door = buildDoorPair(group);
   for(const t of trees){ t.mesh = buildTreeMesh(t); group.add(t.mesh); }
   scene.add(group);
@@ -1152,7 +1138,7 @@ function initScene(){
   const playerMesh = buildPlayerMesh();
   scene.add(playerMesh);
 
-  world = { renderer, scene, camera, wrap, group, playerMesh, pileLogs, door };
+  world = { renderer, scene, camera, wrap, group, playerMesh, pileLogs, door, depositMark };
   resizeScene();
   window.addEventListener("resize", resizeScene);
   updatePlayerMesh();
@@ -1173,8 +1159,8 @@ function resizeScene(){
 function updatePlayerMesh(){
   if(!world) return;
   world.playerMesh.position.set(state.player.x, 0, state.player.z);
-  // カメラをプレイヤーの南南西側・上方に配置し、見下ろし角度約75度(水平面基準)で見下ろす視点にする
-  world.camera.position.set(state.player.x - 1.5, 15.0, state.player.z + 3.7);
+  // カメラをプレイヤーの南南西側・上方に配置し、見下ろし角度約60度(水平面基準)で見下ろす視点にする
+  world.camera.position.set(state.player.x - 3.1, 13.9, state.player.z + 7.4);
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 
@@ -1510,25 +1496,6 @@ function updateHud(){
   document.getElementById("hudCarry").textContent = `🪵 運搬中: ${state.player.carryWood}`;
 }
 
-// 近くにいる時だけ出現する操作ボタン(効率化メニューを開く/NPCを雇う)。エンターキーでも同じ操作ができる
-function updateContextButton(){
-  const btn = document.getElementById("ctxBtn");
-  const p = state.player;
-  if(activeModal){ btn.hidden = true; btn.onclick = null; return; }
-  if(distTo(EFF_COUNTER_PT.x,EFF_COUNTER_PT.z,p.x,p.z) <= INTERACT_RADIUS){
-    btn.hidden = false;
-    btn.textContent = "🛠️ 効率化";
-    btn.onclick = openEfficiencyModal;
-  } else if(distTo(NPC_COUNTER_PT.x,NPC_COUNTER_PT.z,p.x,p.z) <= INTERACT_RADIUS){
-    btn.hidden = false;
-    btn.textContent = "👷 NPCを雇う";
-    btn.onclick = openNpcModal;
-  } else {
-    btn.hidden = true;
-    btn.onclick = null;
-  }
-}
-
 function animate(ts){
   requestAnimationFrame(animate);
   if(!world) return;
@@ -1539,7 +1506,7 @@ function animate(ts){
   const baseTabActive = document.getElementById("view-base").classList.contains("active");
   if(stepping){
     updateStepping(dt);
-  } else if(heldDir && baseTabActive && !activeModal){
+  } else if(heldDir && baseTabActive){
     attemptStep(heldDir);
   }
   updateDoorSwing(dt);
@@ -1553,9 +1520,7 @@ function animate(ts){
   updateTreeLeafEffects(ts);
   updateAutomationVisuals(ts);
   updateHud();
-  updateContextButton();
   updatePlayerMesh();
-  updatePointLabels();
   world.renderer.render(world.scene, world.camera);
 }
 
@@ -1626,34 +1591,22 @@ function renderMarket(){
 
 // --- 効率化モーダル(木材の確保量・伐採速度・木材の単価をゴールドで強化) -------
 // エリア(効率化カウンター)に来てエンターキーを押すと開く。中では矢印キーで項目を選び、エンターキーで実行できる
-function openEfficiencyModal(){
-  activeModal = "eff";
-  modalSelIndex = 0;
-  renderEffList();
-  document.getElementById("effModal").hidden = false;
-}
-function closeEfficiencyModal(){
-  activeModal = null;
-  document.getElementById("effModal").hidden = true;
-}
-// 効率化エリア(モーダル)に並ぶ項目: 既存の3強化 + 伐採自動化・売買自動化(500Gで導入する全自動ライン)
+// 効率化タブに並ぶ項目: 既存の3強化 + 伐採自動化・売買自動化(500Gで導入する全自動ライン)
 const AUTOMATION_DEFS = {
   autoHarvest: { name:"伐採自動化", icon:"⚙️🪓", kind:"harvest", place:"伐採マシンを森に設置" },
   autoTrade:   { name:"売買自動化", icon:"⚙️💰", kind:"trade",   place:"売買NPCをカウンターに常駐" }
 };
-function effModalKeys(){ return [...Object.keys(UPGRADE_DEFS), ...Object.keys(AUTOMATION_DEFS)]; }
 function renderEffList(){
   const wrap = document.getElementById("effList");
-  const keys = effModalKeys();
+  const keys = [...Object.keys(UPGRADE_DEFS), ...Object.keys(AUTOMATION_DEFS)];
   let html = "";
-  keys.forEach((key, idx)=>{
-    const sel = (activeModal==="eff" && modalSelIndex===idx) ? " selected" : "";
+  keys.forEach((key)=>{
     if(UPGRADE_DEFS[key]){
       const def = UPGRADE_DEFS[key];
       const lv = state.upgrades[key];
       const atCap = lv >= UPGRADE_MAX;
       const cost = atCap ? null : upgradeCost(lv);
-      html += `<div class="eff-row${sel}">
+      html += `<div class="eff-row">
         <div class="eff-info">
           <div class="name">${def.icon} ${def.name} Lv.${lv}</div>
           <div class="lv">${def.desc(lv)}</div>
@@ -1679,7 +1632,7 @@ function renderEffList(){
         descLine = `稼働中 ${a.level}体(1体あたり${AUTOMATION_SELL_RATE}個/秒・客NPCの列も1本ずつ増設)${atCap?"":` → 次Lv ${a.level+1}体`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
       }
       const btnLabel = a.level===0 ? "導入" : `Lv.${a.level+1}へ`;
-      html += `<div class="eff-row${sel}">
+      html += `<div class="eff-row">
         <div class="eff-info">
           <div class="name">${def.icon} ${def.name}${a.level>0?` Lv.${a.level}`:""}</div>
           <div class="lv">${descLine}</div>
@@ -1714,26 +1667,15 @@ const WORKER_KIND_DEFS = {
   harvest: { name:"伐採NPC", icon:"🪓", desc:"森へ行かなくても木材を自動で確保してカウンターに納品する" },
   sell:    { name:"売買NPC", icon:"💰", desc:"売買ポイントでお客さんへの対応を代行する" }
 };
-function openNpcModal(){
-  activeModal = "npc";
-  modalSelIndex = 0;
-  renderNpcHireList();
-  document.getElementById("npcModal").hidden = false;
-}
-function closeNpcModal(){
-  activeModal = null;
-  document.getElementById("npcModal").hidden = true;
-}
 function renderNpcHireList(){
   const wrap = document.getElementById("npcHireList");
   const kinds = Object.keys(WORKER_KIND_DEFS);
   let html = "";
-  kinds.forEach((kind, idx)=>{
+  kinds.forEach((kind)=>{
     const def = WORKER_KIND_DEFS[kind];
     const arr = kind === "harvest" ? state.harvestWorkers : state.sellWorkers;
     const atMax = arr.length >= WORKER_MAX;
-    const sel = (activeModal==="npc" && modalSelIndex===idx) ? " selected" : "";
-    html += `<div class="eff-row${sel}">
+    html += `<div class="eff-row">
       <div class="eff-info">
         <div class="name">${def.icon} ${def.name} (${arr.length}/${WORKER_MAX})</div>
         <div class="lv">${def.desc}</div>
@@ -1752,6 +1694,8 @@ function renderNpcHireList(){
 function render(){
   renderResBar();
   renderMarket();
+  renderEffList();
+  renderNpcHireList();
 }
 
 /* =========================================================
@@ -1791,62 +1735,15 @@ document.querySelectorAll(".dpad [data-dir]").forEach(btn=>{
   btn.addEventListener("pointercancel", end);
 });
 
-// PCの矢印キーでも移動できるようにする。モーダルを開いている間は、矢印キー/エンターキーは
-// モーダル内の項目選択・実行に使われる(プレイヤーの移動には使われない)
+// PCの矢印キーでも移動できるようにする(効率化・雇用は独立したタブになったため、矢印キーは常に移動用)
 const ARROW_KEY_DIR = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right" };
-function modalItemKeys(){
-  return activeModal === "eff" ? effModalKeys() : Object.keys(WORKER_KIND_DEFS);
-}
-function modalRerender(){
-  if(activeModal === "eff") renderEffList();
-  else if(activeModal === "npc") renderNpcHireList();
-}
-function modalConfirm(){
-  const key = modalItemKeys()[modalSelIndex];
-  if(activeModal === "eff"){
-    if(UPGRADE_DEFS[key]) buyUpgrade(key);
-    else if(AUTOMATION_DEFS[key]) buyAutomation(AUTOMATION_DEFS[key].kind);
-  }
-  else if(activeModal === "npc") hireWorker(key);
-}
-function modalClose(){
-  if(activeModal === "eff") closeEfficiencyModal();
-  else if(activeModal === "npc") closeNpcModal();
-}
 window.addEventListener("keydown", (e)=>{
-  if(activeModal){
-    if(e.key==="ArrowUp" || e.key==="ArrowLeft"){
-      e.preventDefault();
-      const n = modalItemKeys().length;
-      modalSelIndex = (modalSelIndex - 1 + n) % n;
-      modalRerender();
-    } else if(e.key==="ArrowDown" || e.key==="ArrowRight"){
-      e.preventDefault();
-      const n = modalItemKeys().length;
-      modalSelIndex = (modalSelIndex + 1) % n;
-      modalRerender();
-    } else if(e.key==="Enter"){
-      e.preventDefault();
-      modalConfirm();
-    } else if(e.key==="Escape"){
-      e.preventDefault();
-      modalClose();
-    }
-    return;
-  }
   const dir = ARROW_KEY_DIR[e.key];
   if(dir){
     e.preventDefault();
     heldDir = dir;
     const btn = document.querySelector(`.dpad [data-dir="${dir}"]`);
     if(btn) btn.classList.add("pressed");
-    return;
-  }
-  if(e.key === "Enter"){
-    e.preventDefault();
-    const p = state.player;
-    if(distTo(EFF_COUNTER_PT.x,EFF_COUNTER_PT.z,p.x,p.z) <= INTERACT_RADIUS) openEfficiencyModal();
-    else if(distTo(NPC_COUNTER_PT.x,NPC_COUNTER_PT.z,p.x,p.z) <= INTERACT_RADIUS) openNpcModal();
   }
 });
 window.addEventListener("keyup", (e)=>{
@@ -1856,16 +1753,6 @@ window.addEventListener("keyup", (e)=>{
   const btn = document.querySelector(`.dpad [data-dir="${dir}"]`);
   if(btn) btn.classList.remove("pressed");
 });
-
-/* =========================================================
-   効率化モーダル
-   ========================================================= */
-document.getElementById("btnCloseEff").addEventListener("click", closeEfficiencyModal);
-
-/* =========================================================
-   NPC雇用モーダル
-   ========================================================= */
-document.getElementById("btnCloseNpc").addEventListener("click", closeNpcModal);
 
 /* =========================================================
    設定モーダル
@@ -1890,10 +1777,7 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     ensureQueueFilled(0);
     doorSwing = 0;
     if(world) setDoorSwing(world.door, 0);
-    activeModal = null;
     document.getElementById("settingsModal").hidden = true;
-    document.getElementById("effModal").hidden = true;
-    document.getElementById("npcModal").hidden = true;
     render();
     updatePlayerMesh();
     updateWoodPile();
