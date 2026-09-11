@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.13.0">
+<meta name="app-version" content="0.14.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -487,7 +487,7 @@ const MARKET_RATES = {
 // v0.9.0: 拠点ゾーンを7x7に拡大。木材売買カウンターは西側に設置(初期のレイアウトに近い形)。
 // 木材伐採エリア(森)は扉の先に直結する連続マップ。
 const TILE = 1;                         // 1マスのサイズ
-const BASE_MIN = -3, BASE_MAX = 3;      // 拠点ゾーン(7x7マス)
+const BASE_MIN = -8, BASE_MAX = 3;      // 拠点ゾーン(横7マス・縦12マス。北へ5マス拡張し、拡張ぶんは売買カウンターのレーン用地に)
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
 const DOOR_Z = BASE_MAX + 1;            // 門の位置(拠点のすぐ南)
 const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
@@ -531,29 +531,36 @@ const AUTOMATION_MAX = 5;               // 自動化の最大レベル
 // レベルアップでは速度を上げず、稼働台数を1台ずつ増やす(1レベル=1台。台数が増えるぶん全体の生産量が伸びる)
 // (収穫量は通常の伐採と同じ木を伐るのでwoodPerTree()をそのまま使う)
 const AUTOMATION_HARVEST_SECONDS = 6;   // マシン1台が木1本を仕上げるのにかかる秒数(固定)
-const AUTOMATION_SELL_RATE_BASE = 2;          // 常駐売買NPC Lv.1の受け渡し速度(個/秒)
-const AUTOMATION_SELL_RATE_PER_LEVEL = 1.2;    // レベルごとの増加量
+const AUTOMATION_SELL_RATE = 2;         // 常駐売買NPC1体あたりの受け渡し速度(個/秒、固定。伐採マシンと同様、
+                                         // レベルアップは速度ではなく台数(=客NPCの列の本数)を増やす方式
 function automationCost(kind){ // レベルアップのコストは大幅に高騰させる(導入時はAUTOMATION_UNLOCK_COST固定)
   const lv = state.automation[kind].level;
   if(lv >= AUTOMATION_MAX) return null;
   if(lv === 0) return AUTOMATION_UNLOCK_COST;
   return Math.round(AUTOMATION_UNLOCK_COST * Math.pow(2.2, lv));
 }
-function tradeMachineRateFor(lv){ return lv>0 ? AUTOMATION_SELL_RATE_BASE + (lv-1)*AUTOMATION_SELL_RATE_PER_LEVEL : 0; }
-function tradeMachineRate(){ return tradeMachineRateFor(state.automation.trade.level); }
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
 const WOOD_COUNTER_X   = BASE_MIN - 1;   // 木材売買カウンターのx(西の柵の位置)
-const DEPOSIT_PT       = { x:BASE_MIN, z:-1 }; // 木材を置くポイント(カウンターのすぐ東=拠点内側)
-const TRADE_PT         = { x:BASE_MIN, z: 1 }; // 売買するポイント(カウンターのすぐ東=拠点内側)
+// カウンターは西の壁の全長(上下1マスを除く)に拡張。北端の1マスを木材の置き場、
+// その南に売買レーンを並べる(レーン0=プレイヤー用、レーン1〜5=売買自動化のレベル分だけ開放)
+const COUNTER_Z_FROM   = BASE_MIN + 1;   // カウンター北端(この1マス北=BASE_MINの行は壁のまま)
+const COUNTER_Z_TO     = BASE_MAX - 1;   // カウンター南端(この1マス南=BASE_MAXの行は壁のまま)
+const DEPOSIT_PT       = { x:BASE_MIN, z:COUNTER_Z_FROM }; // 木材を置くポイント(カウンター最北端)
+const TRADE_LANE_MAX   = AUTOMATION_MAX + 1; // 売買レーンの総数(プレイヤー用1+自動化最大5)
+function tradeLaneZ(i){ return COUNTER_Z_FROM + 1 + i; }          // レーンiの取引ポイントz(置き場のすぐ南から順に並ぶ)
+function tradeLaneTradePt(i){ return { x: BASE_MIN, z: tradeLaneZ(i) }; }
+function tradeLaneNpcPos(i){ return { x: BASE_MIN+1, z: tradeLaneZ(i) }; } // 自動化NPCの立ち位置(カウンター内側)
+const TRADE_PT         = tradeLaneTradePt(0); // レーン0=プレイヤー用の売買するポイント(既存名を維持)
 const NPC_COUNTER_PT   = { x:BASE_MAX-1, z:-2 }; // NPCエリア(伐採NPC・売買NPCを統一して雇用、床のみ・通行可)
 const EFF_COUNTER_PT   = { x:BASE_MAX-1, z: 2 }; // 効率化エリア(床のみ・通行可)
 const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 
-// 客NPCの待機エリア(拠点の外、西側。土の広場・7x7)
+// 客NPCの待機エリア(拠点の外、西側。土の広場)。縦方向は拠点と同じ幅まで拡張し、
+// 拡張ぶんが各売買レーンの客NPCの列(横方向)を収める土地になる
 const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
 const PLAZA_MIN_X = PLAZA_MAX_X - 6;
-const PLAZA_MIN_Z = -3, PLAZA_MAX_Z = 3;
+const PLAZA_MIN_Z = BASE_MIN, PLAZA_MAX_Z = BASE_MAX;
 
 // 木材伐採エリア(森)の横幅: 客待機エリアの西端まで拡張(縦方向=z方向は拠点と同じ幅のまま)
 const FOREST_MIN_X = PLAZA_MIN_X;   // 西端は客待機エリアの西端に揃える
@@ -564,7 +571,7 @@ const FOREST_MAX_X = BASE_MAX;      // 東端は拠点と同じ(変更なし)
 const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシンの初期位置(森。導入後は担当の木まで歩いて移動する)
 const AUTO_BOX_WOOD_PT  = { x:0, z:BASE_MAX };        // 木材収集ボックス(拠点、伐採エリアの扉のすぐ手前)
 const AUTO_BOX_GOLD_PT  = { x:BASE_MAX-2, z:2 };      // G収集ボックス(拠点、効率化ポイントのすぐ隣)
-const AUTO_TRADE_NPC_PT = { x:BASE_MIN+1, z:1 };      // 常駐売買NPCの立ち位置(売買ポイントのすぐ隣)
+// 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
 // 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)
 const TREE_DEFS = [];
@@ -580,7 +587,9 @@ let heldDir = null;         // 十字キー/矢印キーで押下中の方向
 let stepping = false;       // 1マス移動アニメーションの進行中かどうか
 let stepFrom = {x:0,z:0}, stepTo = {x:0,z:0}, stepT = 0;
 let harvestingTreeIdx = -1; // 現在伐採進行中の木(HUD表示用)
-let npcQueue = [];          // 購入待ちNPCの列(先頭が現在取引中)
+// 購入待ちNPCの列。売買レーンごとに1本(npcQueues[i]、先頭が現在取引中)。
+// レーン0=プレイヤー用は常時有効、レーン1以降は売買自動化のレベルに応じて有効化される
+let npcQueues = Array.from({length: TRADE_LANE_MAX}, () => []);
 let npcColorIdx = 0;
 let lastFrameTime = null;
 let doorSwing = 0;          // 扉の開き具合(0=閉,1=開)。プレイヤーが近づくと自動で開閉する(演出のみ、移動はブロックしない)
@@ -621,7 +630,8 @@ function buildGround(group){
   addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, baseWidth, 0.2, baseZLen); // 拠点ゾーンの地面(草)
   addBox(group, new THREE.MeshStandardMaterial({color:0x3f5e2f}), forestCx,-0.1,(DOOR_Z+FOREST_MAX_Z+1)/2, forestWidth, 0.2, forestZLen); // 森ゾーンの地面
   const plazaCx = (PLAZA_MIN_X+PLAZA_MAX_X)/2, plazaCz = (PLAZA_MIN_Z+PLAZA_MAX_Z)/2;
-  addBox(group, new THREE.MeshStandardMaterial({color:0x8a6f4a}), plazaCx,-0.1,plazaCz, 7, 0.2, 7); // 客NPC待機エリアの地面(土の広場)
+  const plazaDepth = (PLAZA_MAX_Z - PLAZA_MIN_Z + 1) + 1; // 縦方向は拠点と同じ幅まで拡張済み
+  addBox(group, new THREE.MeshStandardMaterial({color:0x8a6f4a}), plazaCx,-0.1,plazaCz, 7, 0.2, plazaDepth); // 客NPC待機エリアの地面(土の広場)
 }
 // 拠点(幅7)と森(客待機エリアまで拡張した幅)は横幅が異なるため、東西の柵は扉の行(DOOR_Z)を境に
 // 幅が切り替わる2段構成にする(扉の行そのものは森側の幅いっぱいに、扉の隙間だけ開ける)
@@ -636,12 +646,11 @@ function buildFence(group){
   addBox(group, mat, BASE_MAX+1, 0.8, ((BASE_MIN-1)+DOOR_Z)/2, 0.4, 1.6, baseEastZLen);
   const forestSideZLen = (FOREST_MAX_Z+1) - DOOR_Z;
   addBox(group, mat, FOREST_MAX_X+1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
-  // 西: 拠点部分(木材売買カウンターの範囲だけ切れ目にして、カウンター本体で塞ぐ)+ 森部分(森幅、扉の行から南)
-  const cZFrom = DEPOSIT_PT.z - 0.5, cZTo = TRADE_PT.z + 0.5; // カウンターの占めるz範囲
-  const westNorthLen = cZFrom - (BASE_MIN-1);
-  const westMidLen = DOOR_Z - cZTo;
-  addBox(group, mat, BASE_MIN-1, 0.8, ((BASE_MIN-1)+cZFrom)/2, 0.4, 1.6, westNorthLen);
-  addBox(group, mat, BASE_MIN-1, 0.8, (cZTo+DOOR_Z)/2, 0.4, 1.6, westMidLen);
+  // 西: 上下1マスずつだけ壁を残し、それ以外の全長(COUNTER_Z_FROM〜COUNTER_Z_TO)はカウンター本体で塞ぐ
+  // + 森部分(森幅、扉の行から南)
+  addBox(group, mat, BASE_MIN-1, 0.8, BASE_MIN, 0.4, 1.6, 1);           // 上端の壁(1マス)
+  const westSouthLen = DOOR_Z - (BASE_MAX-0.5);
+  addBox(group, mat, BASE_MIN-1, 0.8, (BASE_MAX-0.5+DOOR_Z)/2, 0.4, 1.6, westSouthLen); // 下端の壁(1マス)+扉の行までの接続
   addBox(group, mat, FOREST_MIN_X-1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
   // 門の行(森幅いっぱいに、扉の隙間だけ開ける)
   const doorLeftW = DOOR_FROM - (FOREST_MIN_X-1), doorRightW = (FOREST_MAX_X+1) - DOOR_TO;
@@ -771,15 +780,16 @@ function buildLogPileAt(group, cx, cz, baseY, count){
   return bundles;
 }
 function buildWoodCounter(group){
-  // 木材売買カウンター(拠点の西側、柵に埋め込み)。内側(拠点)にプレイヤー用の置き場・売買ポイント、
-  // 外側(客NPC待機エリア)から客NPCがアクセスするドライブスルー形式
-  const cz = (DEPOSIT_PT.z + TRADE_PT.z) / 2;
-  const clen = (TRADE_PT.z - DEPOSIT_PT.z) + 2.2;
+  // 木材売買カウンター(拠点の西側の壁、上下1マスを除く全長=COUNTER_Z_FROM〜COUNTER_Z_TO)。
+  // 内側(拠点)にプレイヤー用の置き場・売買ポイント(レーン0)、外側(客NPC待機エリア)から
+  // 客NPCがアクセスするドライブスルー形式。レーン1以降(自動化NPC用)は導入されたぶんだけ稼働する
+  const cz = (COUNTER_Z_FROM + COUNTER_Z_TO) / 2;
+  const clen = (COUNTER_Z_TO - COUNTER_Z_FROM + 1) + 0.2;
   addBox(group, new THREE.MeshStandardMaterial({color:0x7a5a34}), WOOD_COUNTER_X, 0.5, cz, 1.0, 1.0, clen);   // カウンター本体
   addBox(group, new THREE.MeshStandardMaterial({color:0x5c4326}), WOOD_COUNTER_X, 1.05, cz, 1.2, 0.15, clen+0.2); // 天板
   addPad(group, DEPOSIT_PT.x, DEPOSIT_PT.z, 0xc98a4b); // 木材を置くポイント
-  addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント
-  return buildLogPileAt(group, WOOD_COUNTER_X, cz, 1.28, 10);
+  addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント(レーン0)
+  return buildLogPileAt(group, WOOD_COUNTER_X, DEPOSIT_PT.z, 1.28, 10);
 }
 // 木の造形: 旧デザインは葉(コーン)の下端(y=0.8)がプレイヤー/NPCの頭部(y〜0.9〜1.5)と近距離で
 // 重なり、深度バッファの奪い合い(z-fighting)で一時的に消えて見えることがあった。
@@ -868,9 +878,9 @@ function nextNpcColor(){
   npcColorIdx++;
   return c;
 }
-function npcSlotPos(i){
-  // 客NPCは拠点の外(客NPC待機エリア)から、木材売買カウンターへ向けて並ぶ
-  return { x: PLAZA_MAX_X - i, z: TRADE_PT.z };
+function npcSlotPos(laneIdx, i){
+  // 客NPCは拠点の外(客NPC待機エリア)から、対応する売買レーンの取引ポイントへ向けて並ぶ
+  return { x: PLAZA_MAX_X - i, z: tradeLaneZ(laneIdx) };
 }
 function buildNpcMesh(color){
   const g = new THREE.Group();
@@ -881,23 +891,25 @@ function buildNpcMesh(color){
   g.add(body, head);
   return g;
 }
-function spawnNpc(){
+function spawnNpc(laneIdx){
   const npc = { color: nextNpcColor(), bought: 0, mesh: null };
   npc.mesh = buildNpcMesh(npc.color);
-  const pos = npcSlotPos(npcQueue.length);
+  const pos = npcSlotPos(laneIdx, npcQueues[laneIdx].length);
   npc.mesh.position.set(pos.x, 0, pos.z);
-  npcQueue.push(npc);
+  npcQueues[laneIdx].push(npc);
   if(world) world.group.add(npc.mesh);
 }
-function ensureQueueFilled(){
-  while(npcQueue.length < QUEUE_SIZE) spawnNpc();
+function ensureQueueFilled(laneIdx){
+  while(npcQueues[laneIdx].length < QUEUE_SIZE) spawnNpc(laneIdx);
 }
-function repositionNpcQueue(){
-  npcQueue.forEach((npc,i)=>{
-    const pos = npcSlotPos(i);
+function repositionNpcQueue(laneIdx){
+  npcQueues[laneIdx].forEach((npc,i)=>{
+    const pos = npcSlotPos(laneIdx, i);
     npc.mesh.position.set(pos.x, 0, pos.z);
   });
 }
+// 現在アクティブな売買レーン数(0=プレイヤー用は常時、1以降は売買自動化のレベル分だけ開放)
+function activeLaneCount(){ return 1 + state.automation.trade.level; }
 // 取引完了後の客NPCの退場アニメーション(毎フレーム呼び出す)。
 // まず右(奥)へ2マス横移動(sidestep)してから、列の後方側(西、PLAZA_MIN_X方向)へ1マスずつ歩き(walk)、
 // 待機エリア外(PLAZA_MIN_Xより西)に出たタイミングで消滅させる
@@ -922,12 +934,12 @@ function updateExitingNpcs(dt){
   }
 }
 // target: "player"(既定、代金を即ゴールドへ) | "box"(売買自動化用。代金は収集ボックスへ貯める)
-function completeFrontNpcPurchase(target){
-  const npc = npcQueue.shift();
+function completeFrontNpcPurchase(laneIdx, target){
+  const npc = npcQueues[laneIdx].shift();
   if(npc){
     // 取引完了後もすぐには消さず、退場アニメーションへ切り替える(右へ2マス→列の後方側へ1マスずつ、
     // 待機エリア外に出たら消滅)。先頭にいた座標からスタート
-    const frontPos = npcSlotPos(0);
+    const frontPos = npcSlotPos(laneIdx, 0);
     npc.pos = { x: frontPos.x, z: frontPos.z };
     npc.exitTargetZ = frontPos.z + 2;
     npc.exitPhase = "sidestep";
@@ -941,16 +953,18 @@ function completeFrontNpcPurchase(target){
     state.resources.gold += reward;
     toast(`🤝 取引成立!+${reward}G`);
   }
-  ensureQueueFilled();
-  repositionNpcQueue();
+  ensureQueueFilled(laneIdx);
+  repositionNpcQueue(laneIdx);
 }
 // 在庫と列を使って、渡された量(端数可)ぶん取引を進める。実際に処理できた量を返す
-// (手動での売買ポイント滞在・雇用NPCによる自動売買・売買自動化マシンの3者から共通で呼び出す)
-function processTradeUnits(amount, target){
+// (手動での売買ポイント滞在・雇用NPCによる自動売買・売買自動化NPCの3者から共通で呼び出す。laneIdxで
+// どの売買レーンの列を消化するか指定する)
+function processTradeUnits(laneIdx, amount, target){
   let remain = amount;
   let used = 0;
-  while(remain > 1e-9 && npcQueue.length > 0 && state.resources.wood > 1e-9){
-    const front = npcQueue[0];
+  const queue = npcQueues[laneIdx];
+  while(remain > 1e-9 && queue.length > 0 && state.resources.wood > 1e-9){
+    const front = queue[0];
     const room = NPC_BUY_ORDER - front.bought;
     const take = Math.min(remain, room, state.resources.wood);
     if(take <= 1e-9) break;
@@ -958,7 +972,7 @@ function processTradeUnits(amount, target){
     front.bought += take;
     remain -= take;
     used += take;
-    if(front.bought >= NPC_BUY_ORDER - 1e-9) completeFrontNpcPurchase(target);
+    if(front.bought >= NPC_BUY_ORDER - 1e-9) completeFrontNpcPurchase(laneIdx, target);
   }
   return used;
 }
@@ -1019,9 +1033,10 @@ function buildAutomationHarvestMesh(){
   return g;
 }
 // 常駐売買NPC(カウンターに常に立っている。単発雇用の売買NPCとは別に色分け)
-function buildAutomationTradeNpcMesh(){
+function buildAutomationTradeNpcMesh(laneIdx){
   const g = buildWorkerMesh(0x4f8fe0);
-  g.position.set(AUTO_TRADE_NPC_PT.x, 0, AUTO_TRADE_NPC_PT.z);
+  const pos = tradeLaneNpcPos(laneIdx);
+  g.position.set(pos.x, 0, pos.z);
   return g;
 }
 // 木材収集ボックス(拠点)。蓋を木材色にして一目でわかるようにする
@@ -1058,13 +1073,34 @@ function syncAutomationMeshes(){
     world.autoWoodBoxMesh = null;
   }
   const tLv = state.automation.trade.level;
-  if(tLv > 0 && !world.autoTradeNpcMesh){
-    world.autoTradeNpcMesh = buildAutomationTradeNpcMesh();
+  if(tLv > 0 && !world.autoGoldBoxMesh){
     world.autoGoldBoxMesh = buildAutomationGoldBoxMesh();
-    world.group.add(world.autoTradeNpcMesh, world.autoGoldBoxMesh);
-  } else if(tLv <= 0 && world.autoTradeNpcMesh){
-    world.group.remove(world.autoTradeNpcMesh, world.autoGoldBoxMesh);
-    world.autoTradeNpcMesh = null; world.autoGoldBoxMesh = null;
+    world.group.add(world.autoGoldBoxMesh);
+  } else if(tLv <= 0 && world.autoGoldBoxMesh){
+    world.group.remove(world.autoGoldBoxMesh);
+    world.autoGoldBoxMesh = null;
+  }
+  syncTradeLanes();
+}
+// 売買自動化のレベル(=開放されたレーン数)に合わせて、レーン1以降の常駐NPC・客NPCの列を同期する
+// (レーン0=プレイヤー用は別枠で常時有効なのでここでは扱わない)
+function syncTradeLanes(){
+  if(!world) return;
+  if(!world.tradeNpcMeshes) world.tradeNpcMeshes = [];
+  const active = activeLaneCount();
+  for(let i=1; i<TRADE_LANE_MAX; i++){
+    const shouldBeActive = i < active;
+    if(shouldBeActive && !world.tradeNpcMeshes[i]){
+      const m = buildAutomationTradeNpcMesh(i);
+      world.group.add(m);
+      world.tradeNpcMeshes[i] = m;
+      ensureQueueFilled(i);
+    } else if(!shouldBeActive && world.tradeNpcMeshes[i]){
+      world.group.remove(world.tradeNpcMeshes[i]);
+      world.tradeNpcMeshes[i] = null;
+      npcQueues[i].forEach(npc=> world.group.remove(npc.mesh)); // 開放されなくなったレーンの客NPCも消す
+      npcQueues[i] = [];
+    }
   }
 }
 // 伐採マシン(台数ぶん)の位置・伐採エフェクトの見た目を毎フレーム更新する(伐採NPCと同じ方式)
@@ -1139,7 +1175,7 @@ function initScene(){
   resizeScene();
   window.addEventListener("resize", resizeScene);
   updatePlayerMesh();
-  ensureQueueFilled();
+  ensureQueueFilled(0); // レーン0(プレイヤー用)は常時有効。レーン1以降はsyncAutomationMeshes()内のsyncTradeLanes()が担当
   updateWoodPile();
   syncWorkerMeshes();
   syncAutomationMeshes();
@@ -1255,15 +1291,15 @@ function updateInteractions(dt){
     }
   }
 
-  // 拠点ゾーン: 売買ポイント(先頭のNPCに木材を渡し続け、3個で1回の取引が成立)
+  // 拠点ゾーン: 売買ポイント(レーン0=プレイヤー用。先頭のNPCに木材を渡し続け、3個で1回の取引が成立)
   if(distTo(TRADE_PT.x,TRADE_PT.z,p.x,p.z) <= INTERACT_RADIUS){
-    ensureQueueFilled();
-    if(state.resources.wood > 0 && npcQueue.length > 0){
-      const used = processTradeUnits(WOOD_TRANSFER_PER_SEC*dt);
+    ensureQueueFilled(0);
+    if(state.resources.wood > 0 && npcQueues[0].length > 0){
+      const used = processTradeUnits(0, WOOD_TRANSFER_PER_SEC*dt);
       if(used > 0){ renderResBar(); updateWoodPile(); save(); }
-      const front = npcQueue[0];
+      const front = npcQueues[0][0];
       showAction(front ? `💰 お客さんへ渡し中… ${Math.floor(front.bought)}/${NPC_BUY_ORDER}` : "お客さんを待っています…");
-    } else if(npcQueue.length === 0){
+    } else if(npcQueues[0].length === 0){
       showAction("お客さんを待っています…");
     } else {
       showAction("木材の在庫がありません");
@@ -1389,12 +1425,12 @@ function processHiredWorkers(now){
     if(produced > 0){ state.resources.wood += produced; w.remaining -= produced; changed = true; }
     if(w.remaining <= 1e-9){ state.harvestWorkers.splice(i,1); changed = true; }
   }
-  // 売買NPC: 売買ポイントでの受け渡しを代行
-  if(npcQueue.length > 0){
+  // 売買NPC(単発雇用、レーン0=プレイヤー用の列で代行): 売買ポイントでの受け渡しを代行
+  if(npcQueues[0].length > 0){
     for(let i = state.sellWorkers.length-1; i >= 0; i--){
       const w = state.sellWorkers[i];
       const amount = Math.min(elapsedSec*SELL_NPC_RATE, w.remaining);
-      const used = amount > 0 ? processTradeUnits(amount) : 0;
+      const used = amount > 0 ? processTradeUnits(0, amount) : 0;
       if(used > 0){ w.remaining -= used; changed = true; }
       if(w.remaining <= 1e-9){ state.sellWorkers.splice(i,1); changed = true; }
     }
@@ -1426,7 +1462,7 @@ function buyAutomation(kind){
   } else if(kind === "harvest"){
     toast(`⚙️ 伐採マシンを増設した!(計${a.level}台)`);
   } else {
-    toast(`⚙️ 常駐売買NPCをLv.${a.level}に強化した!`);
+    toast(`⚙️ 常駐売買NPCを増員した!(計${a.level}体・客NPCの列も増設)`);
   }
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
@@ -1461,10 +1497,16 @@ function processAutomation(now){
     }
   }
 
-  if(state.automation.trade.level > 0 && npcQueue.length > 0 && state.resources.wood > 1e-9){
-    const amount = elapsedSec * tradeMachineRate();
-    const used = amount > 0 ? processTradeUnits(amount, "box") : 0;
-    if(used > 0) changed = true;
+  // 売買自動化: レベル分(=開放されたレーン数ぶん)のNPCが、各自の列に対して独立に売買を進める
+  // (伐採マシンと同様、レベルアップは速度ではなく台数=レーン数を増やす方式)
+  const tLv = state.automation.trade.level;
+  if(tLv > 0 && state.resources.wood > 1e-9){
+    for(let lane=1; lane<=tLv; lane++){
+      if(npcQueues[lane].length === 0) continue;
+      const amount = elapsedSec * AUTOMATION_SELL_RATE;
+      const used = amount > 0 ? processTradeUnits(lane, amount, "box") : 0;
+      if(used > 0) changed = true;
+    }
   }
   if(changed){ renderResBar(); updateWoodPile(); save(); }
 }
@@ -1656,9 +1698,7 @@ function renderEffList(){
       } else if(def.kind==="harvest"){
         descLine = `稼働中 ${a.level}台(1台あたり木1本を${AUTOMATION_HARVEST_SECONDS}秒で伐採)${atCap?"":` → 次Lv ${a.level+1}台`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
       } else {
-        const cur = tradeMachineRateFor(a.level).toFixed(1);
-        const next = atCap ? null : tradeMachineRateFor(a.level+1).toFixed(1);
-        descLine = `現在 ${cur}/秒${atCap?"":` → 次Lv ${next}/秒`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+        descLine = `稼働中 ${a.level}体(1体あたり${AUTOMATION_SELL_RATE}個/秒・客NPCの列も1本ずつ増設)${atCap?"":` → 次Lv ${a.level+1}体`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
       }
       const btnLabel = a.level===0 ? "導入" : `Lv.${a.level+1}へ`;
       html += `<div class="eff-row${sel}">
@@ -1865,11 +1905,11 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     trees.forEach(t=>{ t.state="tree"; t.progress=0; t.stumpUntil=0; setTreeVisual(t); });
     harvestingTreeIdx = -1;
     stepping = false;
-    if(world) npcQueue.forEach(npc=> world.group.remove(npc.mesh));
-    npcQueue = [];
+    if(world) npcQueues.forEach(q=> q.forEach(npc=> world.group.remove(npc.mesh)));
+    npcQueues = Array.from({length: TRADE_LANE_MAX}, () => []);
     if(world) exitingNpcs.forEach(npc=> world.group.remove(npc.mesh));
     exitingNpcs = [];
-    ensureQueueFilled();
+    ensureQueueFilled(0);
     doorSwing = 0;
     if(world) setDoorSwing(world.door, 0);
     activeModal = null;
