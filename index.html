@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.22.0">
+<meta name="app-version" content="0.23.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1594,7 +1594,7 @@ function hireWorker(kind){
   arr.push(w);
   state.hiredLastTick = Date.now();
   syncWorkerMeshes();
-  renderResBar(); save();
+  renderResBar(); renderNpcHireList(); save();
   toast(`🪙 ${HIRE_COST}Gで${kind==="harvest"?"伐採":"売買"}NPCを雇った`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む)
@@ -1656,7 +1656,7 @@ function buyAutomation(kind, track){
       a.machines.push(m);
     }
     syncAutomationMeshes();
-    renderResBar(); save();
+    renderResBar(); renderEffList(); save();
     if(wasZero){
       toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : "⚙️ 売買NPCをカウンターに常駐させた!");
     } else if(kind === "harvest"){
@@ -1671,7 +1671,7 @@ function buyAutomation(kind, track){
     if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
     state.resources.gold -= cost;
     a.speedLevel += 1;
-    renderResBar(); save();
+    renderResBar(); renderEffList(); save();
     toast(`⚡ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}の効率をLv.${a.speedLevel}に強化した!`);
   }
 }
@@ -1686,7 +1686,7 @@ function buyBaseExpansion(){
   rebuildStaticGeometry();
   repositionAllTradeLanes();
   rebuildTransportBelt(); // ベルトコンベアの終点(カウンター側)も拠点拡張で動くため作り直す
-  renderResBar(); save();
+  renderResBar(); renderEffList(); save();
   toast(`🏗️ 拠点を北へ${BASE_EXPANSION_STEP}マス拡張した!(計${state.baseExpansion.level}回)`);
 }
 // 木材自動運搬(ベルトコンベア)の導入・レベルアップ。Lv.0→1で導入(同時にベルトコンベアが出現)、
@@ -1700,7 +1700,7 @@ function buyTransport(){
   const wasZero = t.level === 0;
   t.level += 1;
   syncTransportBelt();
-  renderResBar(); save();
+  renderResBar(); renderEffList(); save();
   toast(wasZero ? "⚙️ 木材自動運搬用のベルトコンベアを設置した!" : `⚡ ベルトコンベアの運搬効率をLv.${t.level}に強化した!`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
@@ -1838,15 +1838,32 @@ function fmtTime(ms){
 }
 
 // 上部タブの資源バーは廃止。ゴールドのみプレイ画面内のHUD(運搬中表示の右横)に表示する。
-// 効率化タブ・雇用タブのボタンはstate.resources.goldを基準にdisabled属性を決めているため、
-// 雇用NPCの売買・自動化の売買ボックス回収など、購入操作を経ずにゴールドが変化する経路でも
-// ボタンの表示が古いままにならないよう、ゴールドが変わりうる箇所は必ずrenderResBar()を呼ぶ
-// 前提で、ここから両タブのリストをまとめて再描画する(効率化タブで所持金が足りているのに
-// レベルアップできなくなる不具合の修正)
+// あわせて、効率化タブ・雇用タブの「ゴールド不足で無効化されたボタン」も軽量に最新化する
+// (renderResBar()はゴールドが変わりうる箇所のほぼ全て——自動化・雇用NPCの背景収入など、
+// 購入操作を経ない経路も含む——から毎フレームのように呼ばれるため、ここでフルの再描画
+// (renderEffList()/renderNpcHireList()、innerHTML書き換え)を行うと、背景収入が発生するたびに
+// ボタンのDOMノードが丸ごと作り直されてしまう。モバイルではタップ中(touchstart→click成立前)に
+// ボタンが差し替わるとクリックが成立せず、「反応がない」「Gを消費してレベルアップ/雇用できない」
+// という不具合になる(v0.21.0で混入した回帰、v0.23.0で修正)。そのため、ここでは既存のDOMノードは
+// 一切作り直さず、disabled属性だけを更新する軽量版(refreshEffButtons/refreshHireButtons)を呼ぶ。
+// 内容そのものが変わる購入直後は、各buy*/hireWorker側で個別にrenderEffList()/renderNpcHireList()
+// のフル再描画を呼ぶ
 function renderResBar(){
   document.getElementById("hudGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
-  renderEffList();
-  renderNpcHireList();
+  refreshEffButtons();
+  refreshHireButtons();
+}
+// data-cost属性を持つボタン(=ゴールド不足以外の理由では無効化されていないボタン)だけを対象に、
+// 現在の所持ゴールドと比較してdisabled属性を更新する。DOMノードは作り直さない
+function refreshEffButtons(){
+  document.querySelectorAll("#effList button[data-cost]").forEach(btn=>{
+    btn.disabled = state.resources.gold < Number(btn.getAttribute("data-cost"));
+  });
+}
+function refreshHireButtons(){
+  document.querySelectorAll("#npcHireList button[data-cost]").forEach(btn=>{
+    btn.disabled = state.resources.gold < Number(btn.getAttribute("data-cost"));
+  });
 }
 
 function renderMarket(){
@@ -1960,7 +1977,7 @@ function renderEffList(){
         </div>
         ${atCap
           ? `<button class="btn btn-sub" disabled>MAX</button>`
-          : `<button class="btn btn-sub" data-eff="${key}" ${state.resources.gold<cost?"disabled":""}>🪙${cost}</button>`}
+          : `<button class="btn btn-sub" data-eff="${key}" data-cost="${cost}" ${state.resources.gold<cost?"disabled":""}>🪙${cost}</button>`}
       </div>`;
     } else {
       const r = automationRow(key, AUTOMATION_DEFS[key]);
@@ -1973,7 +1990,7 @@ function renderEffList(){
           ? `<button class="btn btn-sub" disabled>MAX</button>`
           : r.disabled
             ? `<button class="btn btn-sub" disabled>${r.btnLabel} 🪙${r.cost}</button>`
-            : `<button class="btn btn-sub" ${r.dataAttr} ${state.resources.gold<r.cost?"disabled":""}>${r.btnLabel} 🪙${r.cost}</button>`}
+            : `<button class="btn btn-sub" ${r.dataAttr} data-cost="${r.cost}" ${state.resources.gold<r.cost?"disabled":""}>${r.btnLabel} 🪙${r.cost}</button>`}
       </div>`;
     }
   });
@@ -1992,7 +2009,7 @@ function renderEffList(){
       </div>
       ${atCap
         ? `<button class="btn btn-sub" disabled>MAX</button>`
-        : `<button class="btn btn-sub" data-expand="1" ${state.resources.gold<cost?"disabled":""}>${lv===0?"拡張":`${lv+1}回目へ`} 🪙${cost}</button>`}
+        : `<button class="btn btn-sub" data-expand="1" data-cost="${cost}" ${state.resources.gold<cost?"disabled":""}>${lv===0?"拡張":`${lv+1}回目へ`} 🪙${cost}</button>`}
     </div>`;
   }
   // 木材自動運搬(ベルトコンベア。自動化とは別枠、専用の購入関数を使う)
@@ -2010,7 +2027,7 @@ function renderEffList(){
       </div>
       ${atCap
         ? `<button class="btn btn-sub" disabled>MAX</button>`
-        : `<button class="btn btn-sub" data-transport="1" ${state.resources.gold<cost?"disabled":""}>${lv===0?"導入":`Lv.${lv+1}へ`} 🪙${cost}</button>`}
+        : `<button class="btn btn-sub" data-transport="1" data-cost="${cost}" ${state.resources.gold<cost?"disabled":""}>${lv===0?"導入":`Lv.${lv+1}へ`} 🪙${cost}</button>`}
     </div>`;
   }
   wrap.innerHTML = html;
@@ -2035,7 +2052,7 @@ function buyUpgrade(key){
   if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
   state.resources.gold -= cost;
   state.upgrades[key] += 1;
-  renderResBar(); save();
+  renderResBar(); renderEffList(); save();
   toast(`🛠️ ${UPGRADE_DEFS[key].name}をLv.${state.upgrades[key]}に強化した!`);
 }
 
@@ -2059,7 +2076,7 @@ function renderNpcHireList(){
       </div>
       ${atMax
         ? `<button class="btn btn-sub" disabled>満員</button>`
-        : `<button class="btn btn-sub" data-hire="${kind}" ${state.resources.gold<HIRE_COST?"disabled":""}>🪙${HIRE_COST}</button>`}
+        : `<button class="btn btn-sub" data-hire="${kind}" data-cost="${HIRE_COST}" ${state.resources.gold<HIRE_COST?"disabled":""}>🪙${HIRE_COST}</button>`}
     </div>`;
   });
   wrap.innerHTML = html;
@@ -2069,8 +2086,10 @@ function renderNpcHireList(){
 }
 
 function render(){
-  renderResBar(); // 効率化タブ・雇用タブのリストもここで併せて再描画される
+  renderResBar();
   renderMarket();
+  renderEffList();
+  renderNpcHireList();
 }
 
 /* =========================================================
