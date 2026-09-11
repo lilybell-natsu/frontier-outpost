@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.15.0">
+<meta name="app-version" content="0.16.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1202,8 +1202,8 @@ function resizeScene(){
 function updatePlayerMesh(){
   if(!world) return;
   world.playerMesh.position.set(state.player.x, 0, state.player.z);
-  // カメラを後方・上方に引いて見える範囲を広げ、真上に近かった見下ろし角度を斜めからの見た目に緩和
-  world.camera.position.set(state.player.x, 9.0, state.player.z + 13.0);
+  // カメラをプレイヤーの南西側・上方に配置し、斜め上から見下ろす3/4視点にする
+  world.camera.position.set(state.player.x - 9.0, 9.0, state.player.z + 9.0);
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 

@@ -1,6 +1,6 @@
 // フロンティア開拓記 - Service Worker
 // network-first戦略: 常に最新版を優先し、オフライン時のみキャッシュにフォールバックする。
-const CACHE_NAME = "frontier-outpost-cache-v1";
+const CACHE_NAME = "frontier-outpost-cache-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
