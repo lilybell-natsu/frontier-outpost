@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.16.0">
+<meta name="app-version" content="0.17.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -438,6 +438,13 @@ function load(){
     // 座標はグリッド(整数)前提のため、旧セーブの端数座標は最寄りマスへ丸める
     parsed.player.x = Math.round(parsed.player.x);
     parsed.player.z = Math.round(parsed.player.z);
+    // 拠点のレイアウト変更(例: v0.15.0での拠点幅の修正)により、旧セーブの座標が現在は通行不可能な
+    // マス(客待機エリア等)になっていることがある。そのままだと1マスずつしか動けない仕様上、
+    // 拠点内へ戻れず操作不能になってしまうため、現在地が通行不可能なら初期位置へ戻す
+    if(blocked(parsed.player.x, parsed.player.z)){
+      parsed.player.x = PLAYER_SPAWN.x;
+      parsed.player.z = PLAYER_SPAWN.z;
+    }
     return parsed;
   }catch(e){
     return defaultState();
@@ -1203,7 +1210,8 @@ function updatePlayerMesh(){
   if(!world) return;
   world.playerMesh.position.set(state.player.x, 0, state.player.z);
   // カメラをプレイヤーの南西側・上方に配置し、斜め上から見下ろす3/4視点にする
-  world.camera.position.set(state.player.x - 9.0, 9.0, state.player.z + 9.0);
+  // (高さに対して水平距離を大きくするほど見下ろし角度が水平に近づく=視点が「起きる」)
+  world.camera.position.set(state.player.x - 11.0, 6.0, state.player.z + 11.0);
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 
