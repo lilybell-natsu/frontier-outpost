@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.20.0">
+<meta name="app-version" content="0.21.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -322,10 +322,12 @@ function defaultState(){
     // 伐採マシンはcountLevelぶんmachinesに要素が並ぶ(各要素が{treeIdx,pos,progress,arrived,stepTimer}を
     // 持つ。雇用NPCのw.treeIdx/w.pos/w.arrivedと同じ考え方)
     automation: {
-      harvest: { countLevel:0, speedLevel:0, boxWood:0, machines:[] },
-      trade:   { countLevel:0, speedLevel:0, boxGold:0 }
+      harvest:   { countLevel:0, speedLevel:0, boxWood:0, machines:[] },
+      trade:     { countLevel:0, speedLevel:0, boxGold:0 },
+      transport: { level:0 } // 木材自動運搬(ベルトコンベア)。導入すると木材収集ボックス→カウンターへ自動で木材が運ばれる
     },
     automationLastTick: Date.now(),
+    transportLastTick: Date.now(),
     baseExpansion: { level:0 } // 効率化タブの拠点拡張(レベルごとに北へBASE_EXPANSION_STEPマス拡張)
   };
 }
@@ -377,7 +379,9 @@ function load(){
       parsed.automation.trade.speedLevel = 0;
     }
     delete parsed.automation.trade.level;
+    if(!parsed.automation.transport) parsed.automation.transport = { level:0 };
     if(!parsed.automationLastTick) parsed.automationLastTick = Date.now();
+    if(!parsed.transportLastTick) parsed.transportLastTick = Date.now();
     if(!parsed.baseExpansion) parsed.baseExpansion = { level:0 };
     delete parsed.hiredJob; delete parsed.boxWood; delete parsed.autoSell; delete parsed.player.map; // 旧仕様の名残を掃除(拠点と森を1枚のマップに統合)
     // 座標はグリッド(整数)前提のため、旧セーブの端数座標は最寄りマスへ丸める
@@ -529,6 +533,24 @@ function baseExpansionCost(){
   const lv = state.baseExpansion.level;
   if(lv >= BASE_EXPANSION_MAX) return null;
   return Math.round(BASE_EXPANSION_UNLOCK_COST * Math.pow(1.9, lv));
+}
+
+// 木材自動運搬(ベルトコンベア): 木材収集ボックス(AUTO_BOX_WOOD_PT)に貯まった木材を、
+// プレイヤーが回収しに行かなくても、自動でカウンターの在庫(state.resources.wood)へ運ぶ。
+// 台数/効率のような2トラックではなく単一のlevel(Lv.0=未導入、Lv.1で導入すると同時に
+// ベルトコンベアが出現し、以降のレベルアップは運搬効率(個/秒)の強化のみを行う)
+const TRANSPORT_MAX = LEVEL_MAX;
+const TRANSPORT_UNLOCK_COST = 600;      // Lv.0→1(導入)に必要なゴールド
+function transportCost(){
+  const lv = state.automation.transport.level;
+  if(lv >= TRANSPORT_MAX) return null;
+  return Math.round(TRANSPORT_UNLOCK_COST * Math.pow(2.1, lv));
+}
+const TRANSPORT_RATE_BASE = 1.5;   // Lv.1での運搬速度(個/秒)
+const TRANSPORT_RATE_STEP = 0.3;   // Lvごとの増加量
+function transportRateFor(lv){
+  if(lv <= 0) return 0;
+  return TRANSPORT_RATE_BASE + (lv-1)*TRANSPORT_RATE_STEP;
 }
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
@@ -1174,6 +1196,74 @@ function updateAutomationVisuals(now){
   });
 }
 
+// 木材自動運搬(ベルトコンベア)の3Dオブジェクト。木材収集ボックス(AUTO_BOX_WOOD_PT)から
+// 置き場(DEPOSIT_PT、拠点拡張で北へ動く)まで斜めに1本渡し、ベルト本体+スラット(横縞)+
+// 運搬中の木材(3個、ループ移動)で構成する。ベルト本体のローカルX軸を運搬方向に合わせて
+// group全体をY軸回転させる
+function buildTransportBeltMesh(){
+  const from = AUTO_BOX_WOOD_PT, to = DEPOSIT_PT;
+  const dx = to.x - from.x, dz = to.z - from.z;
+  const len = Math.max(0.5, Math.sqrt(dx*dx + dz*dz));
+  const g = new THREE.Group();
+  g.position.set((from.x+to.x)/2, 0, (from.z+to.z)/2);
+  g.rotation.y = -Math.atan2(dz, dx); // ローカル+X(長さ方向)がDEPOSIT_PT側を向くようにする
+
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(len, 0.08, 0.5), new THREE.MeshStandardMaterial({ color:0x3a3f47 }));
+  belt.position.y = 0.06;
+  g.add(belt);
+  const slatCount = Math.max(3, Math.round(len*1.5));
+  for(let i=0;i<slatCount;i++){
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(0.07,0.1,0.54), new THREE.MeshStandardMaterial({ color:0x585f6b }));
+    slat.position.set(-len/2 + (i+0.5)*(len/slatCount), 0.105, 0);
+    g.add(slat);
+  }
+
+  const packets = [];
+  const packetCount = 3;
+  for(let i=0;i<packetCount;i++){
+    // 小さな木材の束(箱)。ベルトのローカルX軸=運搬方向にそのまま沿うので、追加の回転は不要
+    const packet = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.22,0.32), new THREE.MeshStandardMaterial({ color:0x8a6b3f }));
+    packet.position.y = 0.2;
+    g.add(packet);
+    packets.push(packet);
+  }
+
+  g.userData.length = len;
+  g.userData.packets = packets;
+  return g;
+}
+// state.automation.transport.levelに合わせて、ベルトコンベアの表示を同期する(未導入なら非表示のまま)
+function syncTransportBelt(){
+  if(!world) return;
+  const active = state.automation.transport.level > 0;
+  if(active && !world.transportBelt){
+    const belt = buildTransportBeltMesh();
+    world.group.add(belt);
+    world.transportBelt = belt;
+  } else if(!active && world.transportBelt){
+    world.group.remove(world.transportBelt);
+    world.transportBelt = null;
+  }
+}
+// 拠点拡張でDEPOSIT_PTが動いたときなど、ベルトが導入済みなら座標ごと作り直す
+function rebuildTransportBelt(){
+  if(!world || !world.transportBelt) return;
+  world.group.remove(world.transportBelt);
+  world.transportBelt = null;
+  syncTransportBelt();
+}
+// ベルトコンベア上の木材(3個)を、運搬効率(個/秒)に応じた速さでループ移動させる(演出のみ)
+function updateTransportBeltVisual(now){
+  if(!world || !world.transportBelt) return;
+  const len = world.transportBelt.userData.length;
+  const lv = state.automation.transport.level;
+  const speed = 1.0 + Math.max(0, lv-1)*0.12; // マス/秒(見た目用。レベルが上がるほど心持ち速く見せる)
+  const t = now/1000;
+  world.transportBelt.userData.packets.forEach((packet, i)=>{
+    const phase = ((t*speed + i*(len/3)) % len + len) % len;
+    packet.position.x = -len/2 + phase;
+  });
+}
 
 function initScene(){
   const canvas = document.getElementById("gameCanvas");
@@ -1209,6 +1299,7 @@ function initScene(){
   updateWoodPile();
   syncWorkerMeshes();
   syncAutomationMeshes();
+  syncTransportBelt();
   requestAnimationFrame(animate);
 }
 // 地面・柵・木材売買カウンター(本体・天板・丸太の山)・置き場/売買マークを構築し、worldに登録する。
@@ -1465,7 +1556,7 @@ function hireWorker(kind){
   arr.push(w);
   state.hiredLastTick = Date.now();
   syncWorkerMeshes();
-  renderResBar(); renderNpcHireList(); save();
+  renderResBar(); save();
   toast(`🪙 ${HIRE_COST}Gで${kind==="harvest"?"伐採":"売買"}NPCを雇った`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む)
@@ -1527,7 +1618,7 @@ function buyAutomation(kind, track){
       a.machines.push(m);
     }
     syncAutomationMeshes();
-    renderResBar(); renderEffList(); save();
+    renderResBar(); save();
     if(wasZero){
       toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : "⚙️ 売買NPCをカウンターに常駐させた!");
     } else if(kind === "harvest"){
@@ -1542,7 +1633,7 @@ function buyAutomation(kind, track){
     if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
     state.resources.gold -= cost;
     a.speedLevel += 1;
-    renderResBar(); renderEffList(); save();
+    renderResBar(); save();
     toast(`⚡ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}の効率をLv.${a.speedLevel}に強化した!`);
   }
 }
@@ -1556,8 +1647,23 @@ function buyBaseExpansion(){
   recomputeBaseLayout(state);
   rebuildStaticGeometry();
   repositionAllTradeLanes();
-  renderResBar(); renderEffList(); save();
+  rebuildTransportBelt(); // ベルトコンベアの終点(カウンター側)も拠点拡張で動くため作り直す
+  renderResBar(); save();
   toast(`🏗️ 拠点を北へ${BASE_EXPANSION_STEP}マス拡張した!(計${state.baseExpansion.level}回)`);
+}
+// 木材自動運搬(ベルトコンベア)の導入・レベルアップ。Lv.0→1で導入(同時にベルトコンベアが出現)、
+// 以降のレベルアップは運搬効率(個/秒)のみを強化する
+function buyTransport(){
+  const t = state.automation.transport;
+  if(t.level >= TRANSPORT_MAX) return;
+  const cost = transportCost();
+  if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
+  state.resources.gold -= cost;
+  const wasZero = t.level === 0;
+  t.level += 1;
+  syncTransportBelt();
+  renderResBar(); save();
+  toast(wasZero ? "⚙️ 木材自動運搬用のベルトコンベアを設置した!" : `⚡ ベルトコンベアの運搬効率をLv.${t.level}に強化した!`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
 function processAutomation(now){
@@ -1606,6 +1712,27 @@ function processAutomation(now){
   }
   if(changed){ renderResBar(); updateWoodPile(); save(); }
 }
+// 木材自動運搬(ベルトコンベア): 現実時間ベースで、木材収集ボックス(harvest.boxWood)から
+// カウンターの在庫(state.resources.wood)へ運搬効率ぶんの木材を移す(他の自動化と同じ方式)
+function processTransport(now){
+  const last = state.transportLastTick || now;
+  const elapsedSec = Math.max(0, (now-last)/1000);
+  state.transportLastTick = now;
+  if(elapsedSec <= 0) return;
+  const t = state.automation.transport;
+  if(t.level <= 0) return;
+  const harvest = state.automation.harvest;
+  if(harvest.boxWood <= 1e-9) return;
+  const room = Math.max(0, storageCap() - state.resources.wood);
+  if(room <= 1e-9) return;
+  const rate = transportRateFor(t.level);
+  const amount = Math.min(elapsedSec*rate, harvest.boxWood, room);
+  if(amount > 1e-9){
+    harvest.boxWood -= amount;
+    state.resources.wood += amount;
+    renderResBar(); updateWoodPile(); save();
+  }
+}
 
 function showAction(text){
   const el = document.getElementById("hudAction");
@@ -1644,9 +1771,11 @@ function animate(ts){
   updateExitingNpcs(dt);
   processHiredWorkers(Date.now());
   processAutomation(Date.now());
+  processTransport(Date.now());
   updateInteractions(dt); // harvestingTreeIdx(手動伐採中の木)をこのフレーム分で確定させてから、葉エフェクトの表示判定に使う
   updateTreeLeafEffects(ts);
   updateAutomationVisuals(ts);
+  updateTransportBeltVisual(ts);
   updateHud();
   updatePlayerMesh();
   world.renderer.render(world.scene, world.camera);
@@ -1670,9 +1799,16 @@ function fmtTime(ms){
   return `${sec}秒`;
 }
 
-// 上部タブの資源バーは廃止。ゴールドのみプレイ画面内のHUD(運搬中表示の右横)に表示する
+// 上部タブの資源バーは廃止。ゴールドのみプレイ画面内のHUD(運搬中表示の右横)に表示する。
+// 効率化タブ・雇用タブのボタンはstate.resources.goldを基準にdisabled属性を決めているため、
+// 雇用NPCの売買・自動化の売買ボックス回収など、購入操作を経ずにゴールドが変化する経路でも
+// ボタンの表示が古いままにならないよう、ゴールドが変わりうる箇所は必ずrenderResBar()を呼ぶ
+// 前提で、ここから両タブのリストをまとめて再描画する(効率化タブで所持金が足りているのに
+// レベルアップできなくなる不具合の修正)
 function renderResBar(){
   document.getElementById("hudGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
+  renderEffList();
+  renderNpcHireList();
 }
 
 function renderMarket(){
@@ -1821,6 +1957,24 @@ function renderEffList(){
         : `<button class="btn btn-sub" data-expand="1" ${state.resources.gold<cost?"disabled":""}>${lv===0?"拡張":`${lv+1}回目へ`} 🪙${cost}</button>`}
     </div>`;
   }
+  // 木材自動運搬(ベルトコンベア。自動化とは別枠、専用の購入関数を使う)
+  {
+    const lv = state.automation.transport.level;
+    const atCap = lv >= TRANSPORT_MAX;
+    const cost = atCap ? null : transportCost();
+    const descLine = lv===0
+      ? "導入すると木材収集ボックス→カウンターへベルトコンベアが自動で木材を運ぶ"
+      : `運搬速度 ${transportRateFor(lv).toFixed(1)}個/秒${atCap?"":` → 次Lv ${transportRateFor(lv+1).toFixed(1)}個/秒`}`;
+    html += `<div class="eff-row">
+      <div class="eff-info">
+        <div class="name">🚚 木材自動運搬${lv>0?` Lv.${lv}`:""}</div>
+        <div class="lv">${descLine}</div>
+      </div>
+      ${atCap
+        ? `<button class="btn btn-sub" disabled>MAX</button>`
+        : `<button class="btn btn-sub" data-transport="1" ${state.resources.gold<cost?"disabled":""}>${lv===0?"導入":`Lv.${lv+1}へ`} 🪙${cost}</button>`}
+    </div>`;
+  }
   wrap.innerHTML = html;
   wrap.querySelectorAll("[data-eff]").forEach(btn=>{
     btn.addEventListener("click", ()=> buyUpgrade(btn.getAttribute("data-eff")));
@@ -1832,6 +1986,9 @@ function renderEffList(){
   wrap.querySelectorAll("[data-expand]").forEach(btn=>{
     btn.addEventListener("click", ()=> buyBaseExpansion());
   });
+  wrap.querySelectorAll("[data-transport]").forEach(btn=>{
+    btn.addEventListener("click", ()=> buyTransport());
+  });
 }
 function buyUpgrade(key){
   const lv = state.upgrades[key];
@@ -1840,7 +1997,7 @@ function buyUpgrade(key){
   if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
   state.resources.gold -= cost;
   state.upgrades[key] += 1;
-  renderResBar(); renderEffList(); save();
+  renderResBar(); save();
   toast(`🛠️ ${UPGRADE_DEFS[key].name}をLv.${state.upgrades[key]}に強化した!`);
 }
 
@@ -1874,10 +2031,8 @@ function renderNpcHireList(){
 }
 
 function render(){
-  renderResBar();
+  renderResBar(); // 効率化タブ・雇用タブのリストもここで併せて再描画される
   renderMarket();
-  renderEffList();
-  renderNpcHireList();
 }
 
 /* =========================================================
@@ -1968,6 +2123,7 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     updateWoodPile();
     syncWorkerMeshes();
     syncAutomationMeshes();
+    syncTransportBelt();
     save();
     toast("データをリセットしました");
   }
