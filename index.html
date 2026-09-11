@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.17.0">
+<meta name="app-version" content="0.18.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -74,32 +74,6 @@
     background:none; border:none; color:var(--parchment-dim);
     font-size:18px; padding:4px 6px; cursor:pointer; line-height:1;
   }
-  .res-bar{
-    display:flex; gap:6px;
-  }
-  .res-chip{
-    flex:1;
-    background:var(--panel);
-    border:1px solid var(--card-border);
-    border-radius:10px;
-    padding:5px 6px;
-    display:flex; align-items:center; gap:5px;
-    min-width:0;
-  }
-  .res-chip .ic{font-size:16px;}
-  .res-chip .num{
-    font-size:12.5px; font-weight:600; color:var(--parchment);
-    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  }
-  .res-chip .num small{color:var(--parchment-dim); font-weight:400;}
-  .res-chip.gold .num{color:var(--gold);}
-  .res-fill{
-    height:3px; border-radius:2px; margin-top:3px; background:#00000055; overflow:hidden;
-  }
-  .res-fill i{display:block; height:100%; background:var(--green); transition:width .3s;}
-  .res-chip.food .res-fill i{background:var(--food);}
-  .res-chip.wood .res-fill i{background:var(--wood);}
-
   /* ---------- Main / views ---------- */
   main{flex:1; padding:12px 10px 90px; overflow-y:auto;}
   .view{display:none;}
@@ -158,8 +132,15 @@
     background:#000000aa; color:var(--parchment); font-size:11px; font-weight:700;
     padding:4px 10px; border-radius:20px;
   }
+  .hud-right{
+    display:flex; flex-direction:column; align-items:flex-end; gap:4px;
+  }
   .hud-carry{
     background:#000000aa; color:var(--wood); font-size:11px; font-weight:700;
+    padding:4px 10px; border-radius:20px; white-space:nowrap;
+  }
+  .hud-gold{
+    background:#000000aa; color:var(--gold); font-size:11px; font-weight:700;
     padding:4px 10px; border-radius:20px; white-space:nowrap;
   }
   .hud-action{
@@ -263,28 +244,6 @@
       <h1>🏕️ フロンティア開拓記</h1>
       <button class="gear-btn" id="btnSettings" aria-label="設定">⚙️</button>
     </div>
-    <div class="res-bar">
-      <div class="res-chip wood">
-        <div class="ic">🪵</div>
-        <div style="flex:1;min-width:0;">
-          <div class="num" id="resWoodNum">0 / 0</div>
-          <div class="res-fill"><i id="resWoodFill" style="width:0%"></i></div>
-        </div>
-      </div>
-      <div class="res-chip food">
-        <div class="ic">🍖</div>
-        <div style="flex:1;min-width:0;">
-          <div class="num" id="resFoodNum">0 / 0</div>
-          <div class="res-fill"><i id="resFoodFill" style="width:0%"></i></div>
-        </div>
-      </div>
-      <div class="res-chip gold">
-        <div class="ic">🪙</div>
-        <div style="flex:1;min-width:0;">
-          <div class="num" id="resGoldNum">0</div>
-        </div>
-      </div>
-    </div>
   </header>
 
   <main>
@@ -294,7 +253,10 @@
         <canvas id="gameCanvas"></canvas>
         <div class="hud">
           <div class="hud-map" id="hudMapName">🏕️ 拠点</div>
-          <div class="hud-carry" id="hudCarry">🪵 運搬中: 0</div>
+          <div class="hud-right">
+            <div class="hud-carry" id="hudCarry">🪵 運搬中: 0</div>
+            <div class="hud-gold" id="hudGold">🪙 0</div>
+          </div>
         </div>
         <div class="pt-label dep" id="lblDeposit">📦 置き場</div>
         <div class="pt-label trd" id="lblTrade">💰 売買</div>
@@ -582,8 +544,10 @@ const FOREST_MAX_X = BASE_MAX_X;    // 東端は拠点と同じ(変更なし)
 // 全自動化の設置位置。マシン/NPC本体は稼働場所(森・売買カウンター)に置くが、
 // 収集ボックスはどちらも拠点内にまとめて設置し、プレイヤーが拠点から出ずに回収できるようにする
 const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシンの初期位置(森。導入後は担当の木まで歩いて移動する)
-const AUTO_BOX_WOOD_PT  = { x:0, z:BASE_MAX_Z };      // 木材収集ボックス(拠点、伐採エリアの扉のすぐ手前)
-const AUTO_BOX_GOLD_PT  = { x:BASE_MAX_X-2, z:2 };    // G収集ボックス(拠点、効率化ポイントのすぐ隣)
+const AUTO_BOX_WOOD_PT  = { x:DOOR_TO+1, z:BASE_MAX_Z };        // 木材収集ボックス(木材伐採エリアの扉の東側、拠点側)
+// G収集ボックス(カウンターの南端から東に1マス)。ただしx:BASE_MIN_X+1はtradeLaneNpcPos(5)
+// (=z:COUNTER_Z_TOとちょうど一致)と重なってしまうため、常駐NPCの列からもう1マス東へ離す
+const AUTO_BOX_GOLD_PT  = { x:BASE_MIN_X+2, z:COUNTER_Z_TO };
 // 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
 // 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)
@@ -1209,9 +1173,8 @@ function resizeScene(){
 function updatePlayerMesh(){
   if(!world) return;
   world.playerMesh.position.set(state.player.x, 0, state.player.z);
-  // カメラをプレイヤーの南西側・上方に配置し、斜め上から見下ろす3/4視点にする
-  // (高さに対して水平距離を大きくするほど見下ろし角度が水平に近づく=視点が「起きる」)
-  world.camera.position.set(state.player.x - 11.0, 6.0, state.player.z + 11.0);
+  // カメラをプレイヤーの南南西側・上方に配置し、見下ろし角度約75度(水平面基準)で見下ろす視点にする
+  world.camera.position.set(state.player.x - 1.5, 15.0, state.player.z + 3.7);
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 
@@ -1614,13 +1577,9 @@ function fmtTime(ms){
   return `${sec}秒`;
 }
 
+// 上部タブの資源バーは廃止。ゴールドのみプレイ画面内のHUD(運搬中表示の右横)に表示する
 function renderResBar(){
-  const cap = storageCap();
-  document.getElementById("resWoodNum").textContent = `${fmt(state.resources.wood)} / ${fmt(cap)}`;
-  document.getElementById("resFoodNum").textContent = `${fmt(state.resources.food)} / ${fmt(cap)}`;
-  document.getElementById("resGoldNum").textContent = fmt(state.resources.gold);
-  document.getElementById("resWoodFill").style.width = Math.min(100, state.resources.wood/cap*100)+"%";
-  document.getElementById("resFoodFill").style.width = Math.min(100, state.resources.food/cap*100)+"%";
+  document.getElementById("hudGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
 }
 
 function renderMarket(){
