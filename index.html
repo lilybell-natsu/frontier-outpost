@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.9.0">
+<meta name="app-version" content="0.10.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -383,7 +383,15 @@ function defaultState(){
     harvestWorkers: [], // 伐採NPC(雇用中の個体、最大5体)
     sellWorkers: [],    // 売買NPC(雇用中の個体、最大5体)
     hiredLastTick: Date.now(),
-    upgrades: { amount:0, speed:0, price:0 }
+    upgrades: { amount:0, speed:0, price:0 },
+    // 伐採自動化(森にマシンを設置)・売買自動化(カウンターにNPCを常駐)。
+    // 通常の雇用NPC(単発・消耗式)とは別枠の、Gで導入する常設の全自動生産ライン。
+    // 生産物は自動化収集ボックス(boxWood/boxGold)に貯まり、プレイヤーが現地で回収する
+    automation: {
+      harvest: { level:0, boxWood:0 },
+      trade:   { level:0, boxGold:0 }
+    },
+    automationLastTick: Date.now()
   };
 }
 
@@ -400,6 +408,10 @@ function load(){
     if(!parsed.sellWorkers) parsed.sellWorkers = [];
     if(!parsed.hiredLastTick) parsed.hiredLastTick = Date.now();
     if(!parsed.upgrades) parsed.upgrades = { amount:0, speed:0, price:0 };
+    if(!parsed.automation) parsed.automation = { harvest:{level:0,boxWood:0}, trade:{level:0,boxGold:0} };
+    if(!parsed.automation.harvest) parsed.automation.harvest = { level:0, boxWood:0 };
+    if(!parsed.automation.trade) parsed.automation.trade = { level:0, boxGold:0 };
+    if(!parsed.automationLastTick) parsed.automationLastTick = Date.now();
     delete parsed.hiredJob; delete parsed.boxWood; delete parsed.autoSell; delete parsed.player.map; // 旧仕様の名残を掃除(拠点と森を1枚のマップに統合)
     // 座標はグリッド(整数)前提のため、旧セーブの端数座標は最寄りマスへ丸める
     parsed.player.x = Math.round(parsed.player.x);
@@ -470,7 +482,7 @@ const WOOD_TRANSFER_PER_SEC = 6;        // 売買ポイントでNPCへ木材を�
 const NPC_BUY_ORDER = 3;                // NPC1人が購入する木材の量
 const TRADE_REWARD_GOLD_BASE = 3;       // 1回の売買(NPC1人分)が成立するごとの報酬(効率化で増加)
 const QUEUE_SIZE = 4;                   // 常に並んでいるお客さんNPCの人数
-const PILE_UNIT = 8;                    // カウンター上の木材の山: この量ごとに丸太1本を表示
+const PILE_UNIT = 3;                    // カウンター上の木材の山: 3個(1セット)の束ごとに1つ表示
 const NPC_COLORS = [0xd1594a, 0x4f8fe0, 0x8a6fd4, 0xe0a83f, 0x5cb85c, 0xe07fc0]; // お客さんNPCの色分け
 
 const HIRE_COST = 2;                    // NPCを1体雇うのに必要なゴールド
@@ -490,6 +502,25 @@ function woodPerTree(){ return WOOD_PER_TREE_BASE + state.upgrades.amount; }
 function harvestSeconds(){ return Math.max(1, HARVEST_SECONDS_BASE - state.upgrades.speed*0.4); }
 function tradeRewardGold(){ return TRADE_REWARD_GOLD_BASE + state.upgrades.price; }
 
+// --- 全自動化(伐採マシン・常駐売買NPC)。導入にGを消費する常設ラインで、
+//     単発雇用NPC(HIRE_COST/HIRE_YIELD)とは別枠。生産物は収集ボックスに貯まり、現地で回収する ---
+const AUTOMATION_UNLOCK_COST = 500;     // 初回導入(Lv.0→1)に必要なゴールド
+const AUTOMATION_MAX = 5;               // 自動化の最大レベル
+const AUTOMATION_HARVEST_RATE_BASE = 1;       // 伐採マシンLv.1の生産速度(個/秒)
+const AUTOMATION_HARVEST_RATE_PER_LEVEL = 0.6; // レベルごとの増加量
+const AUTOMATION_SELL_RATE_BASE = 2;          // 常駐売買NPC Lv.1の受け渡し速度(個/秒)
+const AUTOMATION_SELL_RATE_PER_LEVEL = 1.2;    // レベルごとの増加量
+function automationCost(kind){ // レベルアップのコストは大幅に高騰させる(導入時はAUTOMATION_UNLOCK_COST固定)
+  const lv = state.automation[kind].level;
+  if(lv >= AUTOMATION_MAX) return null;
+  if(lv === 0) return AUTOMATION_UNLOCK_COST;
+  return Math.round(AUTOMATION_UNLOCK_COST * Math.pow(2.2, lv));
+}
+function harvestMachineRateFor(lv){ return lv>0 ? AUTOMATION_HARVEST_RATE_BASE + (lv-1)*AUTOMATION_HARVEST_RATE_PER_LEVEL : 0; }
+function tradeMachineRateFor(lv){ return lv>0 ? AUTOMATION_SELL_RATE_BASE + (lv-1)*AUTOMATION_SELL_RATE_PER_LEVEL : 0; }
+function harvestMachineRate(){ return harvestMachineRateFor(state.automation.harvest.level); }
+function tradeMachineRate(){ return tradeMachineRateFor(state.automation.trade.level); }
+
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
 const WOOD_COUNTER_X   = BASE_MIN - 1;   // 木材売買カウンターのx(西の柵の位置)
 const DEPOSIT_PT       = { x:BASE_MIN, z:-1 }; // 木材を置くポイント(カウンターのすぐ東=拠点内側)
@@ -502,6 +533,11 @@ const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
 const PLAZA_MIN_X = PLAZA_MAX_X - 6;
 const PLAZA_MIN_Z = -3, PLAZA_MAX_Z = 3;
+
+// 全自動化の設置位置・収集ボックス位置
+const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシン+収集ボックス(森の空きマス、木の並びの南)
+const AUTO_TRADE_BOX_PT = { x:BASE_MIN, z:0 };        // 売買自動化の収集ボックス(拠点、置き場と売買ポイントの間)
+const AUTO_TRADE_NPC_PT = { x:BASE_MIN+1, z:1 };      // 常駐売買NPCの立ち位置(売買ポイントのすぐ隣)
 
 // 森ゾーン: 木を9本、等間隔(3×3)に配置
 const TREE_DEFS = [];
@@ -669,21 +705,33 @@ function buildEfficiencyArea(group){
   // 効率化エリア(拠点)。建物は置かず、床のエリア表示のみ。ここに来ると効率化の強化フォームを選択できる
   addPad(group, EFF_COUNTER_PT.x, EFF_COUNTER_PT.z, 0x4f8fe0);
 }
+// 丸太3本を束ねた「1セット」の見た目(木材3個=1セットとして積む)
+function buildLogBundle(mat){
+  const g = new THREE.Group();
+  const offsets = [[-0.1,0],[0.1,0],[0,0.1]];
+  for(const [ox,oy] of offsets){
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,0.4,8), mat);
+    log.rotation.z = Math.PI/2;
+    log.position.set(ox,oy,0);
+    g.add(log);
+  }
+  return g;
+}
 function buildLogPileAt(group, cx, cz, baseY, count){
-  // 積まれた木材の山(見た目のみ)。丸太メッシュをあらかじめ用意し非表示にしておき、量に応じて表示数を切り替える
+  // 積まれた木材の山(見た目のみ)。3本束ねた「1セット」をあらかじめ用意し非表示にしておき、
+  // セット数(木材数/PILE_UNIT)に応じて表示数を切り替える
   const mat = new THREE.MeshStandardMaterial({ color:0xc98a4b });
-  const logs = [];
+  const bundles = [];
   const perRow = 3;
   for(let i=0; i<count; i++){
     const row = Math.floor(i/perRow), col = i%perRow;
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.4,8), mat);
-    mesh.rotation.z = Math.PI/2;
-    mesh.position.set(cx-0.25+col*0.25, baseY+row*0.16, cz);
-    mesh.visible = false;
-    group.add(mesh);
-    logs.push(mesh);
+    const bundle = buildLogBundle(mat);
+    bundle.position.set(cx-0.3+col*0.3, baseY+row*0.24, cz);
+    bundle.visible = false;
+    group.add(bundle);
+    bundles.push(bundle);
   }
-  return logs;
+  return bundles;
 }
 function buildWoodCounter(group){
   // 木材売買カウンター(拠点の西側、柵に埋め込み)。内側(拠点)にプレイヤー用の置き場・売買ポイント、
@@ -696,21 +744,75 @@ function buildWoodCounter(group){
   addPad(group, TRADE_PT.x, TRADE_PT.z, 0xf0c245);     // 売買するポイント
   return buildLogPileAt(group, WOOD_COUNTER_X, cz, 1.28, 10);
 }
+// 木の造形: 旧デザインは葉(コーン)の下端(y=0.8)がプレイヤー/NPCの頭部(y〜0.9〜1.5)と近距離で
+// 重なり、深度バッファの奪い合い(z-fighting)で一時的に消えて見えることがあった。
+// 葉を複数の塊に分けてプレイヤー/NPCの背丈より高い位置にまとめ、干渉自体を避ける。
+// 保険として、重なりが生じても目立ちにくいようpolygonOffsetも付与する
 function buildTreeMesh(t){
   const g = new THREE.Group();
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.28,0.9,8), new THREE.MeshStandardMaterial({color:0x6b4a2b}));
-  trunk.position.y = 0.45; trunk.name = "trunk";
-  const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.1,1.8,9), new THREE.MeshStandardMaterial({color:0x3f7d3a}));
-  leaves.position.y = 1.7; leaves.name = "leaves";
+  const trunkMat = new THREE.MeshStandardMaterial({ color:0x6b4a2b, polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.17,0.24,1.3,8), trunkMat);
+  trunk.position.y = 0.65; trunk.name = "trunk";
+  const leafMat = new THREE.MeshStandardMaterial({ color:0x3f7d3a, polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
+  const leaves = new THREE.Group(); leaves.name = "leaves";
+  const clusterGeo = new THREE.IcosahedronGeometry(0.6, 0);
+  const clusters = [ // [x,y,z,scale] プレイヤー頭部(最大y≈1.5)より高いy=1.9以上にまとめて配置
+    [0, 2.5, 0, 1.0], [0.32, 2.15, 0.18, 0.72], [-0.3, 2.1, -0.22, 0.72],
+    [0.05, 1.9, 0.35, 0.66], [-0.25, 1.95, -0.3, 0.6]
+  ];
+  for(const [cx,cy,cz,scale] of clusters){
+    const m = new THREE.Mesh(clusterGeo, leafMat);
+    m.position.set(cx,cy,cz);
+    m.scale.setScalar(scale);
+    leaves.add(m);
+  }
   g.add(trunk, leaves);
+  // 伐採エフェクト: 落ち葉パーティクル(プレイヤー・NPC・自動マシンいずれの伐採中も、対象の木に表示)
+  // 初期状態は非表示。userData.isLeafで判別し、毎フレームupdateTreeLeafEffects()が位置と表示を更新する
+  const fallMat = new THREE.MeshStandardMaterial({ color:0x5a9c3f, side: THREE.DoubleSide });
+  for(let i=0;i<5;i++){
+    const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.16,0.16), fallMat);
+    leaf.visible = false;
+    leaf.userData.isLeaf = true;
+    leaf.userData.seed = i*1.7;
+    leaf.userData.speed = 0.6 + (i%3)*0.15;
+    leaf.userData.radius = 0.3 + (i%3)*0.15;
+    leaf.userData.baseY = 2.2 + (i%2)*0.3;
+    g.add(leaf);
+  }
   g.position.set(t.x, 0, t.z);
   return g;
 }
 function setTreeVisual(t){
   if(!t.mesh) return;
   const trunk = t.mesh.getObjectByName("trunk"), leaves = t.mesh.getObjectByName("leaves");
-  if(t.state === "tree"){ trunk.scale.set(1,1,1); trunk.position.y = 0.45; leaves.visible = true; }
-  else { trunk.scale.set(1,0.4,1); trunk.position.y = 0.18; leaves.visible = false; }
+  if(t.state === "tree"){ trunk.scale.set(1,1,1); trunk.position.y = 0.65; leaves.visible = true; }
+  else { trunk.scale.set(1,0.25,1); trunk.position.y = 0.16; leaves.visible = false; }
+}
+// 指定した木が(プレイヤー手動・伐採NPC問わず)現在伐採中かどうか
+function isTreeBeingHarvested(idx){
+  if(idx === harvestingTreeIdx) return true;
+  return state.harvestWorkers.some(w => w.treeIdx === idx && w.arrived);
+}
+// 伐採中の木だけ、落ち葉パーティクルを円を描きながら舞い落とす(毎フレーム呼び出す)
+function updateTreeLeafEffects(now){
+  for(let i=0;i<trees.length;i++){
+    const t = trees[i];
+    if(!t.mesh) continue;
+    const active = t.state === "tree" && isTreeBeingHarvested(i);
+    for(const child of t.mesh.children){
+      if(!child.userData || !child.userData.isLeaf) continue;
+      child.visible = active;
+      if(!active) continue;
+      const ud = child.userData;
+      const cycle = 1.7;
+      const tSec = now/1000;
+      const p = (((tSec * ud.speed) + ud.seed) % cycle) / cycle; // 0→1の落下進行度(ループ)
+      const ang = ud.seed + tSec*ud.speed*2;
+      child.position.set(Math.cos(ang)*ud.radius, ud.baseY - p*2.0, Math.sin(ang)*ud.radius);
+      child.rotation.set(ang*1.3, 0, ang*2);
+    }
+  }
 }
 function buildPlayerMesh(){
   const g = new THREE.Group();
@@ -758,18 +860,23 @@ function repositionNpcQueue(){
     npc.mesh.position.set(pos.x, 0, pos.z);
   });
 }
-function completeFrontNpcPurchase(){
+// target: "player"(既定、代金を即ゴールドへ) | "box"(売買自動化用。代金は収集ボックスへ貯める)
+function completeFrontNpcPurchase(target){
   const npc = npcQueue.shift();
   if(npc && npc.mesh && world) world.group.remove(npc.mesh);
   const reward = tradeRewardGold();
-  state.resources.gold += reward;
+  if(target === "box"){
+    state.automation.trade.boxGold += reward; // 現地(常駐NPCのそば)で回収するまで蓄積、トーストは出さない
+  } else {
+    state.resources.gold += reward;
+    toast(`🤝 取引成立!+${reward}G`);
+  }
   ensureQueueFilled();
   repositionNpcQueue();
-  toast(`🤝 取引成立!+${reward}G`);
 }
 // 在庫と列を使って、渡された量(端数可)ぶん取引を進める。実際に処理できた量を返す
-// (手動での売買ポイント滞在・雇用NPCによる自動売買の両方から共通で呼び出す)
-function processTradeUnits(amount){
+// (手動での売買ポイント滞在・雇用NPCによる自動売買・売買自動化マシンの3者から共通で呼び出す)
+function processTradeUnits(amount, target){
   let remain = amount;
   let used = 0;
   while(remain > 1e-9 && npcQueue.length > 0 && state.resources.wood > 1e-9){
@@ -781,7 +888,7 @@ function processTradeUnits(amount){
     front.bought += take;
     remain -= take;
     used += take;
-    if(front.bought >= NPC_BUY_ORDER - 1e-9) completeFrontNpcPurchase();
+    if(front.bought >= NPC_BUY_ORDER - 1e-9) completeFrontNpcPurchase(target);
   }
   return used;
 }
@@ -812,6 +919,65 @@ function syncWorkerMeshes(){
     return m;
   });
 }
+// --- 全自動化(伐採マシン・常駐売買NPC)の見た目 ---------------------------
+// 収集ボックス(木箱)の共通メッシュ
+function buildCollectionBoxMesh(){
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.4,0.5), new THREE.MeshStandardMaterial({color:0x8a6b3f}));
+  box.position.y = 0.2;
+  return box;
+}
+// 伐採マシン(森に設置。回転する集材ファンネルを持つ簡易な機械)
+function buildAutomationHarvestMesh(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.6,0.7), new THREE.MeshStandardMaterial({color:0x6b6f78}));
+  body.position.y = 0.3;
+  const funnel = new THREE.Mesh(new THREE.ConeGeometry(0.3,0.4,4), new THREE.MeshStandardMaterial({color:0xe0a83f}));
+  funnel.position.y = 0.75; funnel.name = "funnel";
+  g.add(body, funnel);
+  const box = buildCollectionBoxMesh();
+  box.position.x = 0.75;
+  g.add(box);
+  g.position.set(AUTO_HARVEST_PT.x, 0, AUTO_HARVEST_PT.z);
+  return g;
+}
+// 常駐売買NPC(カウンターに常に立っている。単発雇用の売買NPCとは別に色分け)
+function buildAutomationTradeNpcMesh(){
+  const g = buildWorkerMesh(0x4f8fe0);
+  g.position.set(AUTO_TRADE_NPC_PT.x, 0, AUTO_TRADE_NPC_PT.z);
+  return g;
+}
+function buildAutomationTradeBoxMesh(){
+  const box = buildCollectionBoxMesh();
+  box.position.set(AUTO_TRADE_BOX_PT.x, 0.2, AUTO_TRADE_BOX_PT.z);
+  return box;
+}
+// 自動化の導入状況(state.automation)に合わせて、機械・常駐NPC・収集ボックスの表示を同期する
+function syncAutomationMeshes(){
+  if(!world) return;
+  const hLv = state.automation.harvest.level, tLv = state.automation.trade.level;
+  if(hLv > 0 && !world.autoHarvestMesh){
+    world.autoHarvestMesh = buildAutomationHarvestMesh();
+    world.group.add(world.autoHarvestMesh);
+  } else if(hLv <= 0 && world.autoHarvestMesh){
+    world.group.remove(world.autoHarvestMesh);
+    world.autoHarvestMesh = null;
+  }
+  if(tLv > 0 && !world.autoTradeNpcMesh){
+    world.autoTradeNpcMesh = buildAutomationTradeNpcMesh();
+    world.autoTradeBoxMesh = buildAutomationTradeBoxMesh();
+    world.group.add(world.autoTradeNpcMesh, world.autoTradeBoxMesh);
+  } else if(tLv <= 0 && world.autoTradeNpcMesh){
+    world.group.remove(world.autoTradeNpcMesh, world.autoTradeBoxMesh);
+    world.autoTradeNpcMesh = null; world.autoTradeBoxMesh = null;
+  }
+}
+// 伐採マシンのファンネルをゆっくり回転させ、稼働中であることを表現する(毎フレーム呼び出す)
+function updateAutomationVisuals(now){
+  if(!world || !world.autoHarvestMesh) return;
+  const funnel = world.autoHarvestMesh.getObjectByName("funnel");
+  if(funnel) funnel.rotation.y = now/1000;
+}
+
 // --- 3D座標→画面座標(ポイントのラベル表示に使用) -------------------------
 function worldToScreen(x,y,z){
   const v = new THREE.Vector3(x,y,z).project(world.camera);
@@ -866,6 +1032,7 @@ function initScene(){
   ensureQueueFilled();
   updateWoodPile();
   syncWorkerMeshes();
+  syncAutomationMeshes();
   requestAnimationFrame(animate);
 }
 function resizeScene(){
@@ -994,6 +1161,28 @@ function updateInteractions(dt){
     actionShown = true;
   }
 
+  // 伐採自動化: 収集ボックスに近づくと、貯まっている木材をカウンターの在庫へ自動回収する
+  if(state.automation.harvest.level > 0 && state.automation.harvest.boxWood > 1e-9 &&
+     distTo(AUTO_HARVEST_PT.x,AUTO_HARVEST_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    const room = Math.max(0, storageCap() - state.resources.wood);
+    const take = Math.min(state.automation.harvest.boxWood, room);
+    if(take > 1e-9){
+      state.resources.wood += take;
+      state.automation.harvest.boxWood -= take;
+      renderResBar(); updateWoodPile(); save();
+      toast(`📦 収集ボックスから木材${Math.floor(take)}を回収!`);
+    }
+  }
+  // 売買自動化: 収集ボックスに近づくと、貯まっているゴールドを自動回収する
+  if(state.automation.trade.level > 0 && state.automation.trade.boxGold > 1e-9 &&
+     distTo(AUTO_TRADE_BOX_PT.x,AUTO_TRADE_BOX_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    const take = state.automation.trade.boxGold;
+    state.resources.gold += take;
+    state.automation.trade.boxGold = 0;
+    renderResBar(); save();
+    toast(`📦 収集ボックスからゴールド${Math.floor(take)}を回収!`);
+  }
+
   if(!actionShown) hideAction();
 }
 
@@ -1059,6 +1248,46 @@ function processHiredWorkers(now){
   if(changed){ renderResBar(); updateWoodPile(); syncWorkerMeshes(); save(); }
 }
 
+// --- 全自動化の導入・レベルアップ(効率化エリア) --------------------------
+// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC)。Lv.0→1が導入(500G)、以降はレベルアップ
+function buyAutomation(kind){
+  const a = state.automation[kind];
+  if(a.level >= AUTOMATION_MAX) return;
+  const cost = automationCost(kind);
+  if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
+  state.resources.gold -= cost;
+  const wasZero = a.level === 0;
+  a.level += 1;
+  syncAutomationMeshes();
+  renderResBar(); renderEffList(); save();
+  if(wasZero){
+    toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : "⚙️ 売買NPCをカウンターに常駐させた!");
+  } else {
+    toast(`⚙️ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}をLv.${a.level}に強化した!`);
+  }
+}
+// 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
+function processAutomation(now){
+  const last = state.automationLastTick || now;
+  const elapsedSec = Math.max(0, (now-last)/1000);
+  state.automationLastTick = now;
+  if(elapsedSec <= 0) return;
+  let changed = false;
+  if(state.automation.harvest.level > 0){
+    const produced = elapsedSec * harvestMachineRate();
+    if(produced > 0){
+      state.automation.harvest.boxWood = Math.min(STORAGE_CAP, state.automation.harvest.boxWood + produced);
+      changed = true;
+    }
+  }
+  if(state.automation.trade.level > 0 && npcQueue.length > 0 && state.resources.wood > 1e-9){
+    const amount = elapsedSec * tradeMachineRate();
+    const used = amount > 0 ? processTradeUnits(amount, "box") : 0;
+    if(used > 0) changed = true;
+  }
+  if(changed){ renderResBar(); updateWoodPile(); save(); }
+}
+
 function showAction(text){
   const el = document.getElementById("hudAction");
   el.textContent = text;
@@ -1112,7 +1341,10 @@ function animate(ts){
   updateHarvestWorkersWalk(dt);
   updateHarvestWorkerVisuals();
   processHiredWorkers(Date.now());
-  updateInteractions(dt);
+  processAutomation(Date.now());
+  updateInteractions(dt); // harvestingTreeIdx(手動伐採中の木)をこのフレーム分で確定させてから、葉エフェクトの表示判定に使う
+  updateTreeLeafEffects(ts);
+  updateAutomationVisuals(ts);
   updateHud();
   updateContextButton();
   updatePlayerMesh();
@@ -1201,29 +1433,61 @@ function closeEfficiencyModal(){
   activeModal = null;
   document.getElementById("effModal").hidden = true;
 }
+// 効率化エリア(モーダル)に並ぶ項目: 既存の3強化 + 伐採自動化・売買自動化(500Gで導入する全自動ライン)
+const AUTOMATION_DEFS = {
+  autoHarvest: { name:"伐採自動化", icon:"⚙️🪓", kind:"harvest", place:"伐採マシンを森に設置" },
+  autoTrade:   { name:"売買自動化", icon:"⚙️💰", kind:"trade",   place:"売買NPCをカウンターに常駐" }
+};
+function effModalKeys(){ return [...Object.keys(UPGRADE_DEFS), ...Object.keys(AUTOMATION_DEFS)]; }
 function renderEffList(){
   const wrap = document.getElementById("effList");
-  const keys = Object.keys(UPGRADE_DEFS);
+  const keys = effModalKeys();
   let html = "";
   keys.forEach((key, idx)=>{
-    const def = UPGRADE_DEFS[key];
-    const lv = state.upgrades[key];
-    const atCap = lv >= UPGRADE_MAX;
-    const cost = atCap ? null : upgradeCost(lv);
     const sel = (activeModal==="eff" && modalSelIndex===idx) ? " selected" : "";
-    html += `<div class="eff-row${sel}">
-      <div class="eff-info">
-        <div class="name">${def.icon} ${def.name} Lv.${lv}</div>
-        <div class="lv">${def.desc(lv)}</div>
-      </div>
-      ${atCap
-        ? `<button class="btn btn-sub" disabled>MAX</button>`
-        : `<button class="btn btn-sub" data-eff="${key}" ${state.resources.gold<cost?"disabled":""}>🪙${cost}</button>`}
-    </div>`;
+    if(UPGRADE_DEFS[key]){
+      const def = UPGRADE_DEFS[key];
+      const lv = state.upgrades[key];
+      const atCap = lv >= UPGRADE_MAX;
+      const cost = atCap ? null : upgradeCost(lv);
+      html += `<div class="eff-row${sel}">
+        <div class="eff-info">
+          <div class="name">${def.icon} ${def.name} Lv.${lv}</div>
+          <div class="lv">${def.desc(lv)}</div>
+        </div>
+        ${atCap
+          ? `<button class="btn btn-sub" disabled>MAX</button>`
+          : `<button class="btn btn-sub" data-eff="${key}" ${state.resources.gold<cost?"disabled":""}>🪙${cost}</button>`}
+      </div>`;
+    } else {
+      const def = AUTOMATION_DEFS[key];
+      const a = state.automation[def.kind];
+      const atCap = a.level >= AUTOMATION_MAX;
+      const cost = atCap ? null : automationCost(def.kind);
+      const rateFor = def.kind==="harvest" ? harvestMachineRateFor : tradeMachineRateFor;
+      const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
+      const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
+      const descLine = a.level===0
+        ? `${def.place}(自動で稼働し、収集ボックスに格納)`
+        : `現在 ${rateFor(a.level).toFixed(1)}/秒${atCap?"":` → 次Lv ${rateFor(a.level+1).toFixed(1)}/秒`} ・ ボックス内 ${boxIcon}${Math.floor(box)}(現地で回収)`;
+      const btnLabel = a.level===0 ? "導入" : `Lv.${a.level+1}へ`;
+      html += `<div class="eff-row${sel}">
+        <div class="eff-info">
+          <div class="name">${def.icon} ${def.name}${a.level>0?` Lv.${a.level}`:""}</div>
+          <div class="lv">${descLine}</div>
+        </div>
+        ${atCap
+          ? `<button class="btn btn-sub" disabled>MAX</button>`
+          : `<button class="btn btn-sub" data-auto="${def.kind}" ${state.resources.gold<cost?"disabled":""}>${btnLabel} 🪙${cost}</button>`}
+      </div>`;
+    }
   });
   wrap.innerHTML = html;
   wrap.querySelectorAll("[data-eff]").forEach(btn=>{
     btn.addEventListener("click", ()=> buyUpgrade(btn.getAttribute("data-eff")));
+  });
+  wrap.querySelectorAll("[data-auto]").forEach(btn=>{
+    btn.addEventListener("click", ()=> buyAutomation(btn.getAttribute("data-auto")));
   });
 }
 function buyUpgrade(key){
@@ -1323,7 +1587,7 @@ document.querySelectorAll(".dpad [data-dir]").forEach(btn=>{
 // モーダル内の項目選択・実行に使われる(プレイヤーの移動には使われない)
 const ARROW_KEY_DIR = { ArrowUp:"up", ArrowDown:"down", ArrowLeft:"left", ArrowRight:"right" };
 function modalItemKeys(){
-  return activeModal === "eff" ? Object.keys(UPGRADE_DEFS) : Object.keys(WORKER_KIND_DEFS);
+  return activeModal === "eff" ? effModalKeys() : Object.keys(WORKER_KIND_DEFS);
 }
 function modalRerender(){
   if(activeModal === "eff") renderEffList();
@@ -1331,7 +1595,10 @@ function modalRerender(){
 }
 function modalConfirm(){
   const key = modalItemKeys()[modalSelIndex];
-  if(activeModal === "eff") buyUpgrade(key);
+  if(activeModal === "eff"){
+    if(UPGRADE_DEFS[key]) buyUpgrade(key);
+    else if(AUTOMATION_DEFS[key]) buyAutomation(AUTOMATION_DEFS[key].kind);
+  }
   else if(activeModal === "npc") hireWorker(key);
 }
 function modalClose(){
@@ -1421,6 +1688,7 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     updatePlayerMesh();
     updateWoodPile();
     syncWorkerMeshes();
+    syncAutomationMeshes();
     save();
     toast("データをリセットしました");
   }
