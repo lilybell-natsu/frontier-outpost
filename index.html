@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.19.0">
+<meta name="app-version" content="0.20.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -318,13 +318,15 @@ function defaultState(){
     // 通常の雇用NPC(単発・消耗式)とは別枠の、Gで導入する常設の全自動生産ライン。
     // 生産物は自動化収集ボックス(木材収集ボックス=boxWood/G収集ボックス=boxGold)に貯まり、
     // どちらも拠点内に設置されるので、プレイヤーは拠点から出ずに回収できる
+    // countLevel=台数(伐採マシンの台数/常駐売買NPCの人数)、speedLevel=1ユニットあたりの効率。
+    // 伐採マシンはcountLevelぶんmachinesに要素が並ぶ(各要素が{treeIdx,pos,progress,arrived,stepTimer}を
+    // 持つ。雇用NPCのw.treeIdx/w.pos/w.arrivedと同じ考え方)
     automation: {
-      // 伐採マシンはレベルアップで台数が増える(1レベル=1台)。machinesは稼働中の台数ぶんの配列で、
-      // 各要素が{treeIdx,pos,progress,arrived,stepTimer}を持つ(雇用NPCのw.treeIdx/w.pos/w.arrivedと同じ考え方)
-      harvest: { level:0, boxWood:0, machines:[] },
-      trade:   { level:0, boxGold:0 }
+      harvest: { countLevel:0, speedLevel:0, boxWood:0, machines:[] },
+      trade:   { countLevel:0, speedLevel:0, boxGold:0 }
     },
-    automationLastTick: Date.now()
+    automationLastTick: Date.now(),
+    baseExpansion: { level:0 } // 効率化タブの拠点拡張(レベルごとに北へBASE_EXPANSION_STEPマス拡張)
   };
 }
 
@@ -341,12 +343,12 @@ function load(){
     if(!parsed.sellWorkers) parsed.sellWorkers = [];
     if(!parsed.hiredLastTick) parsed.hiredLastTick = Date.now();
     if(!parsed.upgrades) parsed.upgrades = { amount:0, speed:0, price:0 };
-    if(!parsed.automation) parsed.automation = { harvest:{level:0,boxWood:0}, trade:{level:0,boxGold:0} };
-    if(!parsed.automation.harvest) parsed.automation.harvest = { level:0, boxWood:0 };
+    if(!parsed.automation) parsed.automation = { harvest:{countLevel:0,speedLevel:0,boxWood:0}, trade:{countLevel:0,speedLevel:0,boxGold:0} };
+    if(!parsed.automation.harvest) parsed.automation.harvest = { countLevel:0, speedLevel:0, boxWood:0 };
     // 旧セーブ(v0.12.0=マシン1台固定・単一のtreeIdx/pos等を直接保持)からの互換:
     // レベル(旧・速度レベル)の数だけマシン台数を用意する
     if(!parsed.automation.harvest.machines){
-      const lv = parsed.automation.harvest.level || 0;
+      const lv = parsed.automation.harvest.level || parsed.automation.harvest.countLevel || 0;
       parsed.automation.harvest.machines = [];
       for(let i=0;i<lv;i++){
         parsed.automation.harvest.machines.push({ treeIdx:null, pos:null, progress:0, arrived:false, stepTimer:0 });
@@ -362,12 +364,27 @@ function load(){
       if(m.arrived === undefined) m.arrived = false;
       if(m.stepTimer === undefined) m.stepTimer = 0;
     });
-    if(!parsed.automation.trade) parsed.automation.trade = { level:0, boxGold:0 };
+    if(!parsed.automation.trade) parsed.automation.trade = { countLevel:0, speedLevel:0, boxGold:0 };
+    // v0.19.0以前(台数・効率が未分離の単一levelだった)からの互換: 旧levelは「台数を何回分購入済みか」
+    // として引き継ぎ、効率は未購入(0)から始める
+    if(parsed.automation.harvest.countLevel === undefined){
+      parsed.automation.harvest.countLevel = parsed.automation.harvest.level || 0;
+      parsed.automation.harvest.speedLevel = 0;
+    }
+    delete parsed.automation.harvest.level;
+    if(parsed.automation.trade.countLevel === undefined){
+      parsed.automation.trade.countLevel = parsed.automation.trade.level || 0;
+      parsed.automation.trade.speedLevel = 0;
+    }
+    delete parsed.automation.trade.level;
     if(!parsed.automationLastTick) parsed.automationLastTick = Date.now();
+    if(!parsed.baseExpansion) parsed.baseExpansion = { level:0 };
     delete parsed.hiredJob; delete parsed.boxWood; delete parsed.autoSell; delete parsed.player.map; // 旧仕様の名残を掃除(拠点と森を1枚のマップに統合)
     // 座標はグリッド(整数)前提のため、旧セーブの端数座標は最寄りマスへ丸める
     parsed.player.x = Math.round(parsed.player.x);
     parsed.player.z = Math.round(parsed.player.z);
+    // このセーブの拠点拡張レベルに合わせてBASE_MIN_Z等を確定させてから、通行判定を行う
+    recomputeBaseLayout(parsed);
     // 拠点のレイアウト変更(例: v0.15.0での拠点幅の修正)により、旧セーブの座標が現在は通行不可能な
     // マス(客待機エリア等)になっていることがある。そのままだと1マスずつしか動けない仕様上、
     // 拠点内へ戻れず操作不能になってしまうため、現在地が通行不可能なら初期位置へ戻す
@@ -427,9 +444,14 @@ const TILE = 1;                         // 1マスのサイズ
 // 拠点ゾーンはx(東西)とz(南北)で別の範囲を持つ長方形(以前はBASE_MIN/BASE_MAXの1組をxにもzにも
 // 使い回していたため、北へ拡張した際に拠点が意図せず正方形になり、床(buildGround)の中心もずれる
 // 不具合が起きていた。東西幅7マスはそのまま、南北だけ拡張できるよう軸ごとに分離する)
-const BASE_MIN_X = -3, BASE_MAX_X = 3;  // 拠点ゾーンの東西範囲(7マス、変更なし)
-const BASE_MIN_Z = -10, BASE_MAX_Z = 3; // 拠点ゾーンの南北範囲(14マス。売買レーン6本を2マス間隔で
-                                         // 並べるのに必要な奥行きまで北へ拡張)
+const BASE_MIN_X = -3, BASE_MAX_X = 3;  // 拠点ゾーンの東西範囲(7マス、拠点拡張の対象外)
+const BASE_MAX_Z = 3;                   // 拠点ゾーンの南端(扉に接する側。拡張の対象外)
+// 拠点ゾーンの北端(南北範囲)は「効率化」タブの拠点拡張で北へ伸びるため、固定値ではなくstate.baseExpansion
+// に応じて再計算する(BASE_MIN_Z_INITIALが未拡張時の初期値、BASE_MIN_ZがrecomputeBaseLayout()で
+// 更新される実際の値)。連動する各種定数も同様にletにして、拡張のたびに追従させる
+const BASE_MIN_Z_INITIAL = -10;         // 拠点ゾーンの南北範囲・初期値(14マス。売買レーン6本を2マス
+                                         // 間隔で並べるのに必要な奥行きまで北へ拡張した値)
+let BASE_MIN_Z = BASE_MIN_Z_INITIAL;
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
 const DOOR_Z = BASE_MAX_Z + 1;          // 門の位置(拠点のすぐ南)
 const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
@@ -454,7 +476,8 @@ const WORKER_MAX = 5;                   // 雇用NPCは種別ごとに最大5体
 const HARVEST_NPC_RATE = 1/2.5;         // 伐採NPC1体あたりの生産速度(個/秒。手動よりゆっくり)
 const SELL_NPC_RATE = WOOD_TRANSFER_PER_SEC; // 売買NPC1体あたりの受け渡し速度(個/秒)
 
-const UPGRADE_MAX = 6;                  // 効率化の最大レベル
+const LEVEL_MAX = 10;                   // 効率化タブの全アップグレードで統一する最大レベル
+const UPGRADE_MAX = LEVEL_MAX;          // 効率化(確保量/速度/単価)の最大レベル
 const UPGRADE_DEFS = {
   amount: { name:"木材の確保量", icon:"🪓", desc:(lv)=>`1回の伐採で +${lv} 個` },
   speed:  { name:"伐採速度",     icon:"⚡", desc:(lv)=>`伐採時間 -${(lv*0.4).toFixed(1)}秒` },
@@ -467,34 +490,63 @@ function tradeRewardGold(){ return TRADE_REWARD_GOLD_BASE + state.upgrades.price
 
 // --- 全自動化(伐採マシン・常駐売買NPC)。導入にGを消費する常設ラインで、
 //     単発雇用NPC(HIRE_COST/HIRE_YIELD)とは別枠。生産物は拠点内の収集ボックス(木材用/G用)に貯まる ---
-const AUTOMATION_UNLOCK_COST = 500;     // 初回導入(Lv.0→1)に必要なゴールド
-const AUTOMATION_MAX = 5;               // 自動化の最大レベル
-// 伐採マシン: 実際に木まで歩いて1本を仕上げる方式。1台あたりの伐採速度は常に一定で、
-// レベルアップでは速度を上げず、稼働台数を1台ずつ増やす(1レベル=1台。台数が増えるぶん全体の生産量が伸びる)
+// 台数(countLevel)と効率(speedLevel)の2トラックに分離。台数は稼働ユニットを1つずつ増やし、
+// 効率は1ユニットあたりの性能を上げる(台数が0のうちは効率を上げても意味がないため購入を制限する)
+const AUTOMATION_UNLOCK_COST = 500;         // 台数トラック Lv.0→1(初回導入)に必要なゴールド
+const AUTOMATION_EFFICIENCY_UNLOCK_COST = 400; // 効率トラック Lv.0→1に必要なゴールド
+const AUTOMATION_MAX = LEVEL_MAX;           // 各トラックの最大レベル
+// 伐採マシン: 実際に木まで歩いて1本を仕上げる方式。効率レベルが上がるほど1本を仕上げる時間が短縮する
 // (収穫量は通常の伐採と同じ木を伐るのでwoodPerTree()をそのまま使う)
-const AUTOMATION_HARVEST_SECONDS = 6;   // マシン1台が木1本を仕上げるのにかかる秒数(固定)
-const AUTOMATION_SELL_RATE = 2;         // 常駐売買NPC1体あたりの受け渡し速度(個/秒、固定。伐採マシンと同様、
-                                         // レベルアップは速度ではなく台数(=客NPCの列の本数)を増やす方式
-function automationCost(kind){ // レベルアップのコストは大幅に高騰させる(導入時はAUTOMATION_UNLOCK_COST固定)
-  const lv = state.automation[kind].level;
+const AUTOMATION_HARVEST_SECONDS_BASE = 6;   // 効率Lv.0での所要秒数
+const AUTOMATION_HARVEST_SECONDS_STEP = 0.4; // 効率Lvごとの短縮秒数
+const AUTOMATION_HARVEST_SECONDS_MIN = 2.0;  // 短縮の下限(Lv.10で到達)
+function automationHarvestSecondsFor(lv){
+  return Math.max(AUTOMATION_HARVEST_SECONDS_MIN, AUTOMATION_HARVEST_SECONDS_BASE - lv*AUTOMATION_HARVEST_SECONDS_STEP);
+}
+// 常駐売買NPC: 効率レベルが上がるほど1体あたりの受け渡し速度が上がる
+const AUTOMATION_SELL_RATE_BASE = 2;    // 効率Lv.0での速度(個/秒)
+const AUTOMATION_SELL_RATE_STEP = 0.5;  // 効率Lvごとの増加量
+function automationSellRateFor(lv){ return AUTOMATION_SELL_RATE_BASE + lv*AUTOMATION_SELL_RATE_STEP; }
+// レベルアップのコストは大幅に高騰させる(導入時はUNLOCK_COST固定)。台数・効率で別カーブを使う
+function automationCountCost(kind){
+  const lv = state.automation[kind].countLevel;
   if(lv >= AUTOMATION_MAX) return null;
   if(lv === 0) return AUTOMATION_UNLOCK_COST;
   return Math.round(AUTOMATION_UNLOCK_COST * Math.pow(2.2, lv));
 }
+function automationEfficiencyCost(kind){
+  const lv = state.automation[kind].speedLevel;
+  if(lv >= AUTOMATION_MAX) return null;
+  if(lv === 0) return AUTOMATION_EFFICIENCY_UNLOCK_COST;
+  return Math.round(AUTOMATION_EFFICIENCY_UNLOCK_COST * Math.pow(2.0, lv));
+}
+// 拠点拡張: レベルアップのたびに拠点を北へ4マス拡張する。売買自動化の台数レベルは、増設後のNPCが
+// 物理的に配置できる拡張幅になるまで、それ以上レベルアップできない(maxTradeLanesFit()で判定)
+const BASE_EXPANSION_STEP = 4;          // 拡張1レベルあたりのマス数(北方向)
+const BASE_EXPANSION_MAX = LEVEL_MAX;
+const BASE_EXPANSION_UNLOCK_COST = 800; // Lv.0→1に必要なゴールド
+function baseExpansionCost(){
+  const lv = state.baseExpansion.level;
+  if(lv >= BASE_EXPANSION_MAX) return null;
+  return Math.round(BASE_EXPANSION_UNLOCK_COST * Math.pow(1.9, lv));
+}
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
-const WOOD_COUNTER_X   = BASE_MIN_X - 1;   // 木材売買カウンターのx(西の柵の位置)
+const WOOD_COUNTER_X   = BASE_MIN_X - 1;   // 木材売買カウンターのx(西の柵の位置。拠点拡張の対象外)
 // カウンターは西の壁の全長(上下1マスを除く)に拡張。北端の1マスを木材の置き場、
-// その南に売買レーンを2マス間隔で並べる(レーン0=プレイヤー用、レーン1〜5=売買自動化のレベル分だけ開放)
-const COUNTER_Z_FROM   = BASE_MIN_Z + 1;   // カウンター北端(この1マス北=BASE_MIN_Zの行は壁のまま)
-const COUNTER_Z_TO     = BASE_MAX_Z - 1;   // カウンター南端(この1マス南=BASE_MAX_Zの行は壁のまま)
-const DEPOSIT_PT       = { x:BASE_MIN_X, z:COUNTER_Z_FROM }; // 木材を置くポイント(カウンター最北端)
-const TRADE_LANE_MAX   = AUTOMATION_MAX + 1; // 売買レーンの総数(プレイヤー用1+自動化最大5)
+// その南に売買レーンを2マス間隔で並べる(レーン0=プレイヤー用、レーン1以降=売買自動化の台数レベル分だけ
+// 開放。ただし拠点拡張で物理的な余地がなければそれ以上は開放できない)。
+// COUNTER_Z_FROM/DEPOSIT_PT/TRADE_PT/PLAZA_MIN_Zは拠点拡張のたびに変わるためletにし、
+// recomputeBaseLayout()でまとめて再計算する
+let COUNTER_Z_FROM;        // カウンター北端(この1マス北の行は壁のまま)
+const COUNTER_Z_TO = BASE_MAX_Z - 1;   // カウンター南端(この1マス南=BASE_MAX_Zの行は壁のまま。拡張の対象外)
+let DEPOSIT_PT;             // 木材を置くポイント(カウンター最北端)
+const TRADE_LANE_MAX   = AUTOMATION_MAX + 1; // 売買レーンの配列上限(プレイヤー用1+自動化最大10)
 const TRADE_LANE_GAP   = 2; // レーン間の間隔(マス)。客NPCの退場時の横移動先(+1マス)がレーン間の空きに収まる
 function tradeLaneZ(i){ return COUNTER_Z_FROM + 1 + i*TRADE_LANE_GAP; } // レーンiの取引ポイントz(置き場のすぐ南から順に並ぶ)
 function tradeLaneTradePt(i){ return { x: BASE_MIN_X, z: tradeLaneZ(i) }; }
 function tradeLaneNpcPos(i){ return { x: BASE_MIN_X+1, z: tradeLaneZ(i) }; } // 自動化NPCの立ち位置(カウンター内側)
-const TRADE_PT         = tradeLaneTradePt(0); // レーン0=プレイヤー用の売買するポイント(既存名を維持)
+let TRADE_PT;                // レーン0=プレイヤー用の売買するポイント(既存名を維持)
 const NPC_COUNTER_PT   = { x:BASE_MAX_X-1, z:-2 }; // 雇用NPCの初期スポーン地点(雇用は「雇用」タブから行う。エリア歩行はなし)
 const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 
@@ -502,7 +554,22 @@ const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 // 拡張ぶんが各売買レーンの客NPCの列(横方向)を収める土地になる
 const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
 const PLAZA_MIN_X = PLAZA_MAX_X - 6;
-const PLAZA_MIN_Z = BASE_MIN_Z, PLAZA_MAX_Z = BASE_MAX_Z;
+let PLAZA_MIN_Z;
+const PLAZA_MAX_Z = BASE_MAX_Z;
+// 現在の拠点拡張レベルで、売買レーンが何本(プレイヤー用含む)物理的に収まるか
+function maxTradeLanesFit(){
+  const span = COUNTER_Z_TO - COUNTER_Z_FROM; // カウンターの有効な長さ(マス、置き場の1マスを除く)
+  return Math.floor((span - 1) / TRADE_LANE_GAP) + 1;
+}
+// 拠点拡張(state.baseExpansion.level)に応じて、拠点の南北範囲と、それに連動する各種座標を再計算する。
+// セーブの読み込み直後・拠点拡張の購入直後の両方で呼び出す
+function recomputeBaseLayout(s){
+  BASE_MIN_Z = BASE_MIN_Z_INITIAL - s.baseExpansion.level * BASE_EXPANSION_STEP;
+  COUNTER_Z_FROM = BASE_MIN_Z + 1;
+  DEPOSIT_PT = { x: BASE_MIN_X, z: COUNTER_Z_FROM };
+  TRADE_PT = tradeLaneTradePt(0);
+  PLAZA_MIN_Z = BASE_MIN_Z;
+}
 
 // 木材伐採エリア(森)の横幅: 客待機エリアの西端まで拡張(縦方向=z方向は拠点と同じ幅のまま)
 const FOREST_MIN_X = PLAZA_MIN_X;   // 西端は客待機エリアの西端に揃える
@@ -890,7 +957,7 @@ function repositionNpcQueue(laneIdx){
   });
 }
 // 現在アクティブな売買レーン数(0=プレイヤー用は常時、1以降は売買自動化のレベル分だけ開放)
-function activeLaneCount(){ return 1 + state.automation.trade.level; }
+function activeLaneCount(){ return 1 + state.automation.trade.countLevel; }
 // 取引完了後の客NPCの退場アニメーション(毎フレーム呼び出す)。
 // まず右(奥)へ1マス横移動(sidestep)してから、列の後方側(西、PLAZA_MIN_X方向)へ1マスずつ歩き(walk)、
 // 待機エリア外(PLAZA_MIN_Xより西)に出たタイミングで消滅させる
@@ -1055,7 +1122,7 @@ function syncAutomationMeshes(){
     world.group.remove(world.autoWoodBoxMesh);
     world.autoWoodBoxMesh = null;
   }
-  const tLv = state.automation.trade.level;
+  const tLv = state.automation.trade.countLevel;
   if(tLv > 0 && !world.autoGoldBoxMesh){
     world.autoGoldBoxMesh = buildAutomationGoldBoxMesh();
     world.group.add(world.autoGoldBoxMesh);
@@ -1122,15 +1189,10 @@ function initScene(){
   scene.add(sun);
 
   const group = new THREE.Group();
-  buildGround(group);
-  buildFence(group);
-  const pileLogs = buildWoodCounter(group);
-  const depositMark = buildDepositMarkSprite();
-  depositMark.position.set(DEPOSIT_PT.x, 1.0, DEPOSIT_PT.z);
-  group.add(depositMark);
-  const tradeMark = buildStaticMarkSprite("💰");
-  tradeMark.position.set(TRADE_PT.x, 1.0, TRADE_PT.z);
-  group.add(tradeMark);
+  // 地面・柵・木材売買カウンター・置き場/売買マークは、拠点拡張(拠点の南北範囲)が変わるたびに
+  // 寸法・位置を作り直す必要があるため、専用のグループにまとめて丸ごと再構築できるようにする
+  const staticGroup = new THREE.Group();
+  group.add(staticGroup);
   const door = buildDoorPair(group);
   for(const t of trees){ t.mesh = buildTreeMesh(t); group.add(t.mesh); }
   scene.add(group);
@@ -1138,7 +1200,8 @@ function initScene(){
   const playerMesh = buildPlayerMesh();
   scene.add(playerMesh);
 
-  world = { renderer, scene, camera, wrap, group, playerMesh, pileLogs, door, depositMark };
+  world = { renderer, scene, camera, wrap, group, staticGroup, playerMesh, door };
+  buildStaticGeometry(); // pileLogs/depositMark/tradeMarkもここでworldに設定される
   resizeScene();
   window.addEventListener("resize", resizeScene);
   updatePlayerMesh();
@@ -1147,6 +1210,40 @@ function initScene(){
   syncWorkerMeshes();
   syncAutomationMeshes();
   requestAnimationFrame(animate);
+}
+// 地面・柵・木材売買カウンター(本体・天板・丸太の山)・置き場/売買マークを構築し、worldに登録する。
+// 拠点拡張の購入直後にも呼び出せるよう、initScene()の一部を切り出した関数
+function buildStaticGeometry(){
+  buildGround(world.staticGroup);
+  buildFence(world.staticGroup);
+  world.pileLogs = buildWoodCounter(world.staticGroup);
+  const depositMark = buildDepositMarkSprite();
+  depositMark.position.set(DEPOSIT_PT.x, 1.0, DEPOSIT_PT.z);
+  world.staticGroup.add(depositMark);
+  world.depositMark = depositMark;
+  const tradeMark = buildStaticMarkSprite("💰");
+  tradeMark.position.set(TRADE_PT.x, 1.0, TRADE_PT.z);
+  world.staticGroup.add(tradeMark);
+  world.tradeMark = tradeMark;
+}
+// 拠点拡張の購入直後に呼び出す: 地面・柵・カウンターを寸法ごと作り直す(座標が変わるため位置指定ではなく再構築が必要)
+function rebuildStaticGeometry(){
+  if(!world) return;
+  while(world.staticGroup.children.length) world.staticGroup.remove(world.staticGroup.children[0]);
+  buildStaticGeometry();
+  updateWoodPile(); // 新しいpileLogs/depositMarkに、現在の木材量を反映する
+}
+// 拠点拡張で売買レーンの座標(tradeLaneZ)がすべて動くため、既存の客NPCの列・常駐売買NPCの表示位置を
+// 新しい座標に合わせて並べ直す(レーン0=プレイヤー用の列も含む)
+function repositionAllTradeLanes(){
+  if(!world) return;
+  for(let lane=0; lane<TRADE_LANE_MAX; lane++){
+    repositionNpcQueue(lane);
+    if(lane>=1 && world.tradeNpcMeshes && world.tradeNpcMeshes[lane]){
+      const pos = tradeLaneNpcPos(lane);
+      world.tradeNpcMeshes[lane].position.set(pos.x, 0, pos.z);
+    }
+  }
 }
 function resizeScene(){
   if(!world) return;
@@ -1276,7 +1373,7 @@ function updateInteractions(dt){
   }
 
   // 伐採自動化: 木材収集ボックス(拠点)に近づくと、貯まっている木材をカウンターの在庫へ自動回収する
-  if(state.automation.harvest.level > 0 && state.automation.harvest.boxWood > 1e-9 &&
+  if(state.automation.harvest.countLevel > 0 && state.automation.harvest.boxWood > 1e-9 &&
      distTo(AUTO_BOX_WOOD_PT.x,AUTO_BOX_WOOD_PT.z,p.x,p.z) <= INTERACT_RADIUS){
     const room = Math.max(0, storageCap() - state.resources.wood);
     const take = Math.min(state.automation.harvest.boxWood, room);
@@ -1288,7 +1385,7 @@ function updateInteractions(dt){
     }
   }
   // 売買自動化: G収集ボックス(拠点)に近づくと、貯まっているゴールドを自動回収する
-  if(state.automation.trade.level > 0 && state.automation.trade.boxGold > 1e-9 &&
+  if(state.automation.trade.countLevel > 0 && state.automation.trade.boxGold > 1e-9 &&
      distTo(AUTO_BOX_GOLD_PT.x,AUTO_BOX_GOLD_PT.z,p.x,p.z) <= INTERACT_RADIUS){
     const take = state.automation.trade.boxGold;
     state.resources.gold += take;
@@ -1406,32 +1503,61 @@ function processHiredWorkers(now){
   if(changed){ renderResBar(); updateWoodPile(); syncWorkerMeshes(); save(); }
 }
 
-// --- 全自動化の導入・レベルアップ(効率化エリア) --------------------------
-// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC)。Lv.0→1が導入(500G)、以降はレベルアップ
-function buyAutomation(kind){
+// --- 全自動化の導入・レベルアップ(効率化タブ) ----------------------------
+// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC)。track: "count"(台数/人数) | "speed"(効率)。
+// countはLv.0→1が導入(500G)、以降はレベルアップ。speedはcountLevelが1以上でないと購入できない
+// (稼働台数が0のうちは効率を上げても意味がないため)
+function buyAutomation(kind, track){
   const a = state.automation[kind];
-  if(a.level >= AUTOMATION_MAX) return;
-  const cost = automationCost(kind);
+  if(track === "count"){
+    if(a.countLevel >= AUTOMATION_MAX) return;
+    if(kind === "trade" && (1 + a.countLevel + 1) > maxTradeLanesFit()){
+      toast("拠点拡張が必要(客NPCの列を置く余地がない)");
+      return;
+    }
+    const cost = automationCountCost(kind);
+    if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
+    state.resources.gold -= cost;
+    const wasZero = a.countLevel === 0;
+    a.countLevel += 1;
+    if(kind === "harvest"){
+      // 伐採マシンは台数レベルアップのたびに1台増える。新しいマシンは1番の木から順に、空いている木を探して割り当てる
+      const m = { treeIdx:null, pos:null, progress:0, arrived:false, stepTimer:0 };
+      assignMachineTree(m, 0);
+      a.machines.push(m);
+    }
+    syncAutomationMeshes();
+    renderResBar(); renderEffList(); save();
+    if(wasZero){
+      toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : "⚙️ 売買NPCをカウンターに常駐させた!");
+    } else if(kind === "harvest"){
+      toast(`⚙️ 伐採マシンを増設した!(計${a.countLevel}台)`);
+    } else {
+      toast(`⚙️ 常駐売買NPCを増員した!(計${a.countLevel}体・客NPCの列も増設)`);
+    }
+  } else { // track === "speed"
+    if(a.countLevel <= 0){ toast(`先に${kind==="harvest"?"伐採マシン":"常駐売買NPC"}を導入してください`); return; }
+    if(a.speedLevel >= AUTOMATION_MAX) return;
+    const cost = automationEfficiencyCost(kind);
+    if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
+    state.resources.gold -= cost;
+    a.speedLevel += 1;
+    renderResBar(); renderEffList(); save();
+    toast(`⚡ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}の効率をLv.${a.speedLevel}に強化した!`);
+  }
+}
+// 拠点拡張(効率化タブ)。レベルアップのたびに拠点を北へBASE_EXPANSION_STEPマス拡張する
+function buyBaseExpansion(){
+  if(state.baseExpansion.level >= BASE_EXPANSION_MAX) return;
+  const cost = baseExpansionCost();
   if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
   state.resources.gold -= cost;
-  const wasZero = a.level === 0;
-  a.level += 1;
-  if(kind === "harvest"){
-    // 伐採マシンはレベルアップのたびに台数が1台増える(速度は上げない)。新しいマシンは1番の木から順に、
-    // 空いている木を探して割り当てる
-    const m = { treeIdx:null, pos:null, progress:0, arrived:false, stepTimer:0 };
-    assignMachineTree(m, 0);
-    a.machines.push(m);
-  }
-  syncAutomationMeshes();
+  state.baseExpansion.level += 1;
+  recomputeBaseLayout(state);
+  rebuildStaticGeometry();
+  repositionAllTradeLanes();
   renderResBar(); renderEffList(); save();
-  if(wasZero){
-    toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : "⚙️ 売買NPCをカウンターに常駐させた!");
-  } else if(kind === "harvest"){
-    toast(`⚙️ 伐採マシンを増設した!(計${a.level}台)`);
-  } else {
-    toast(`⚙️ 常駐売買NPCを増員した!(計${a.level}体・客NPCの列も増設)`);
-  }
+  toast(`🏗️ 拠点を北へ${BASE_EXPANSION_STEP}マス拡張した!(計${state.baseExpansion.level}回)`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
 function processAutomation(now){
@@ -1442,6 +1568,7 @@ function processAutomation(now){
   let changed = false;
 
   const harvest = state.automation.harvest;
+  const harvestNeed = automationHarvestSecondsFor(harvest.speedLevel);
   for(const m of harvest.machines){
     ensureMachineTarget(m);
     // 長時間放置していた場合(オフライン等)は、歩いている途中でも到着済みとみなす(雇用NPCと同じ救済策)
@@ -1453,7 +1580,7 @@ function processAutomation(now){
     if(m.treeIdx != null && m.arrived){
       const t = trees[m.treeIdx];
       m.progress = (m.progress||0) + elapsedSec;
-      if(m.progress >= AUTOMATION_HARVEST_SECONDS){
+      if(m.progress >= harvestNeed){
         const gained = woodPerTree(); // 実際の木を伐るので、通常の伐採と同じ収穫量(効率化の確保量強化も反映)
         const completedIdx = m.treeIdx;
         t.state = "stump"; t.progress = 0; t.stumpUntil = Date.now() + REGROW_SECONDS*1000;
@@ -1465,13 +1592,14 @@ function processAutomation(now){
     }
   }
 
-  // 売買自動化: レベル分(=開放されたレーン数ぶん)のNPCが、各自の列に対して独立に売買を進める
-  // (伐採マシンと同様、レベルアップは速度ではなく台数=レーン数を増やす方式)
-  const tLv = state.automation.trade.level;
+  // 売買自動化: 台数レベル分(=開放されたレーン数ぶん)のNPCが、各自の列に対して独立に売買を進める
+  const trade = state.automation.trade;
+  const tLv = trade.countLevel;
   if(tLv > 0 && state.resources.wood > 1e-9){
+    const rate = automationSellRateFor(trade.speedLevel);
     for(let lane=1; lane<=tLv; lane++){
       if(npcQueues[lane].length === 0) continue;
-      const amount = elapsedSec * AUTOMATION_SELL_RATE;
+      const amount = elapsedSec * rate;
       const used = amount > 0 ? processTradeUnits(lane, amount, "box") : 0;
       if(used > 0) changed = true;
     }
@@ -1589,13 +1717,58 @@ function renderMarket(){
   });
 }
 
-// --- 効率化モーダル(木材の確保量・伐採速度・木材の単価をゴールドで強化) -------
-// エリア(効率化カウンター)に来てエンターキーを押すと開く。中では矢印キーで項目を選び、エンターキーで実行できる
-// 効率化タブに並ぶ項目: 既存の3強化 + 伐採自動化・売買自動化(500Gで導入する全自動ライン)
+// --- 効率化タブ(木材の確保量・伐採速度・木材の単価・自動化・拠点拡張をゴールドで強化) -------
+// 自動化は「台数(count)」「効率(speed)」の2トラック。台数はユニットを1つずつ増やし、
+// 効率は1ユニットあたりの性能(伐採時間短縮/受け渡し速度)を上げる
 const AUTOMATION_DEFS = {
-  autoHarvest: { name:"伐採自動化", icon:"⚙️🪓", kind:"harvest", place:"伐採マシンを森に設置" },
-  autoTrade:   { name:"売買自動化", icon:"⚙️💰", kind:"trade",   place:"売買NPCをカウンターに常駐" }
+  harvestCount: { name:"伐採自動化(台数)", icon:"⚙️🪓", kind:"harvest", track:"count", place:"伐採マシンを森に設置" },
+  harvestSpeed: { name:"伐採自動化(効率)", icon:"⚡🪓", kind:"harvest", track:"speed" },
+  tradeCount:   { name:"売買自動化(人数)", icon:"⚙️💰", kind:"trade",   track:"count", place:"売買NPCをカウンターに常駐" },
+  tradeSpeed:   { name:"売買自動化(効率)", icon:"⚡💰", kind:"trade",   track:"speed" }
 };
+function automationRow(key, def){
+  const a = state.automation[def.kind];
+  const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
+  const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
+  const boxName = def.kind==="harvest" ? "木材収集ボックス" : "G収集ボックス";
+  if(def.track === "count"){
+    const lv = a.countLevel;
+    const atCap = lv >= AUTOMATION_MAX;
+    const needsExpansion = def.kind==="trade" && !atCap && (1 + lv + 1) > maxTradeLanesFit();
+    const cost = atCap ? null : automationCountCost(def.kind);
+    let descLine;
+    if(lv===0){
+      descLine = `${def.place}。生産物は拠点の${boxName}に格納される`;
+    } else {
+      const unit = def.kind==="harvest" ? "台" : "体";
+      descLine = `稼働中 ${lv}${unit}${atCap?"":` → 次Lv ${lv+1}${unit}`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+    }
+    if(needsExpansion) descLine += ` ・ ⚠️拠点拡張が必要(現在${maxTradeLanesFit()-1}人まで対応)`;
+    const btnLabel = lv===0 ? "導入" : `Lv.${lv+1}へ`;
+    return { name:`${def.icon} ${def.name}${lv>0?` Lv.${lv}`:""}`, descLine,
+      disabled: atCap || needsExpansion, atCap, cost, btnLabel, dataAttr:`data-auto="${key}"` };
+  } else {
+    const lv = a.speedLevel;
+    const atCap = lv >= AUTOMATION_MAX;
+    const locked = a.countLevel <= 0; // 台数0のうちは効率を上げる意味がないため購入不可
+    const cost = atCap ? null : automationEfficiencyCost(def.kind);
+    let descLine;
+    if(locked){
+      descLine = `先に${def.kind==="harvest"?"伐採自動化(台数)":"売買自動化(人数)"}を導入してください`;
+    } else if(def.kind==="harvest"){
+      const cur = automationHarvestSecondsFor(lv).toFixed(1);
+      const next = atCap ? null : automationHarvestSecondsFor(lv+1).toFixed(1);
+      descLine = `1台あたり木1本を${cur}秒で伐採${atCap?"":` → 次Lv ${next}秒`}`;
+    } else {
+      const cur = automationSellRateFor(lv).toFixed(1);
+      const next = atCap ? null : automationSellRateFor(lv+1).toFixed(1);
+      descLine = `1体あたり${cur}個/秒${atCap?"":` → 次Lv ${next}個/秒`}`;
+    }
+    const btnLabel = `Lv.${lv+1}へ`;
+    return { name:`${def.icon} ${def.name}${lv>0?` Lv.${lv}`:""}`, descLine,
+      disabled: atCap || locked, atCap, cost, btnLabel, dataAttr:`data-auto="${key}"` };
+  }
+}
 function renderEffList(){
   const wrap = document.getElementById("effList");
   const keys = [...Object.keys(UPGRADE_DEFS), ...Object.keys(AUTOMATION_DEFS)];
@@ -1616,39 +1789,48 @@ function renderEffList(){
           : `<button class="btn btn-sub" data-eff="${key}" ${state.resources.gold<cost?"disabled":""}>🪙${cost}</button>`}
       </div>`;
     } else {
-      const def = AUTOMATION_DEFS[key];
-      const a = state.automation[def.kind];
-      const atCap = a.level >= AUTOMATION_MAX;
-      const cost = atCap ? null : automationCost(def.kind);
-      const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
-      const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
-      const boxName = def.kind==="harvest" ? "木材収集ボックス" : "G収集ボックス";
-      let descLine;
-      if(a.level===0){
-        descLine = `${def.place}。生産物は拠点の${boxName}に格納される`;
-      } else if(def.kind==="harvest"){
-        descLine = `稼働中 ${a.level}台(1台あたり木1本を${AUTOMATION_HARVEST_SECONDS}秒で伐採)${atCap?"":` → 次Lv ${a.level+1}台`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
-      } else {
-        descLine = `稼働中 ${a.level}体(1体あたり${AUTOMATION_SELL_RATE}個/秒・客NPCの列も1本ずつ増設)${atCap?"":` → 次Lv ${a.level+1}体`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
-      }
-      const btnLabel = a.level===0 ? "導入" : `Lv.${a.level+1}へ`;
+      const r = automationRow(key, AUTOMATION_DEFS[key]);
       html += `<div class="eff-row">
         <div class="eff-info">
-          <div class="name">${def.icon} ${def.name}${a.level>0?` Lv.${a.level}`:""}</div>
-          <div class="lv">${descLine}</div>
+          <div class="name">${r.name}</div>
+          <div class="lv">${r.descLine}</div>
         </div>
-        ${atCap
+        ${r.atCap
           ? `<button class="btn btn-sub" disabled>MAX</button>`
-          : `<button class="btn btn-sub" data-auto="${def.kind}" ${state.resources.gold<cost?"disabled":""}>${btnLabel} 🪙${cost}</button>`}
+          : r.disabled
+            ? `<button class="btn btn-sub" disabled>${r.btnLabel} 🪙${r.cost}</button>`
+            : `<button class="btn btn-sub" ${r.dataAttr} ${state.resources.gold<r.cost?"disabled":""}>${r.btnLabel} 🪙${r.cost}</button>`}
       </div>`;
     }
   });
+  // 拠点拡張(自動化とは別枠、専用の購入関数を使う)
+  {
+    const lv = state.baseExpansion.level;
+    const atCap = lv >= BASE_EXPANSION_MAX;
+    const cost = atCap ? null : baseExpansionCost();
+    const descLine = lv===0
+      ? `拠点を北へ${BASE_EXPANSION_STEP}マス拡張する。売買自動化の人数上限を広げるのに必要`
+      : `これまでに${lv}回拡張(北へ計${lv*BASE_EXPANSION_STEP}マス) ・ 売買自動化は現在${maxTradeLanesFit()-1}人まで対応`;
+    html += `<div class="eff-row">
+      <div class="eff-info">
+        <div class="name">🏗️ 拠点拡張${lv>0?` (${lv}回目)`:""}</div>
+        <div class="lv">${descLine}</div>
+      </div>
+      ${atCap
+        ? `<button class="btn btn-sub" disabled>MAX</button>`
+        : `<button class="btn btn-sub" data-expand="1" ${state.resources.gold<cost?"disabled":""}>${lv===0?"拡張":`${lv+1}回目へ`} 🪙${cost}</button>`}
+    </div>`;
+  }
   wrap.innerHTML = html;
   wrap.querySelectorAll("[data-eff]").forEach(btn=>{
     btn.addEventListener("click", ()=> buyUpgrade(btn.getAttribute("data-eff")));
   });
   wrap.querySelectorAll("[data-auto]").forEach(btn=>{
-    btn.addEventListener("click", ()=> buyAutomation(btn.getAttribute("data-auto")));
+    const def = AUTOMATION_DEFS[btn.getAttribute("data-auto")];
+    btn.addEventListener("click", ()=> buyAutomation(def.kind, def.track));
+  });
+  wrap.querySelectorAll("[data-expand]").forEach(btn=>{
+    btn.addEventListener("click", ()=> buyBaseExpansion());
   });
 }
 function buyUpgrade(key){
@@ -1767,6 +1949,7 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
   if(confirm("本当にすべてのデータをリセットしますか?この操作は元に戻せません。")){
     localStorage.removeItem(SAVE_KEY);
     state = defaultState();
+    recomputeBaseLayout(state);
     trees.forEach(t=>{ t.state="tree"; t.progress=0; t.stumpUntil=0; setTreeVisual(t); });
     harvestingTreeIdx = -1;
     stepping = false;
@@ -1778,6 +1961,8 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     doorSwing = 0;
     if(world) setDoorSwing(world.door, 0);
     document.getElementById("settingsModal").hidden = true;
+    rebuildStaticGeometry();
+    repositionAllTradeLanes();
     render();
     updatePlayerMesh();
     updateWoodPile();
@@ -1794,6 +1979,7 @@ document.getElementById("verNum").textContent =
    起動
    ========================================================= */
 state = load();
+recomputeBaseLayout(state); // 新規プレイ(defaultState()経由)の場合もここで確定させる(loadは既存セーブ時のみ内部で呼ぶ)
 render();
 initScene();
 save();
