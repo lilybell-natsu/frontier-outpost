@@ -1,6 +1,6 @@
 // フロンティア開拓記 - Service Worker
 // network-first戦略: 常に最新版を優先し、オフライン時のみキャッシュにフォールバックする。
-const CACHE_NAME = "frontier-outpost-cache-v2";
+const CACHE_NAME = "frontier-outpost-cache-v3";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -27,8 +27,12 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  // "network-first"のつもりでも、fetch()にcacheオプションを指定しないとブラウザ自身のHTTPキャッシュが
+  // このfetch自体に古い応答を返してしまい、実質的に更新が反映されないことがある(v0.21.0で実際に
+  // 再現・特定した不具合)。cache:"no-store"でHTTPキャッシュを完全に迂回し、常に本当に最新のバイト列を
+  // 取得するようにする
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: "no-store" })
       .then((res) => {
         const clone = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone)).catch(()=>{});

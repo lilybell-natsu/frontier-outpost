@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.21.0">
+<meta name="app-version" content="0.22.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -555,20 +555,21 @@ function transportRateFor(lv){
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
 const WOOD_COUNTER_X   = BASE_MIN_X - 1;   // 木材売買カウンターのx(西の柵の位置。拠点拡張の対象外)
-// カウンターは西の壁の全長(上下1マスを除く)に拡張。北端の1マスを木材の置き場、
-// その南に売買レーンを2マス間隔で並べる(レーン0=プレイヤー用、レーン1以降=売買自動化の台数レベル分だけ
-// 開放。ただし拠点拡張で物理的な余地がなければそれ以上は開放できない)。
-// COUNTER_Z_FROM/DEPOSIT_PT/TRADE_PT/PLAZA_MIN_Zは拠点拡張のたびに変わるためletにし、
-// recomputeBaseLayout()でまとめて再計算する
-let COUNTER_Z_FROM;        // カウンター北端(この1マス北の行は壁のまま)
-const COUNTER_Z_TO = BASE_MAX_Z - 1;   // カウンター南端(この1マス南=BASE_MAX_Zの行は壁のまま。拡張の対象外)
-let DEPOSIT_PT;             // 木材を置くポイント(カウンター最北端)
+// カウンターは西の壁の全長(上下1マスを除く)に拡張。v0.22.0で置き場・売買ポイント(レーン0)を
+// 南端(COUNTER_Z_TO、扉・木材収集ボックスに近い側)へ移動し、そこから北へ売買レーンを2マス間隔で
+// 並べるように変更(旧: 北端=COUNTER_Z_FROM側だった)。レーン1以降=売買自動化の台数レベル分だけ
+// 開放(拠点拡張で物理的な余地がなければそれ以上は開放できない)。COUNTER_Z_TOは拠点拡張の対象外
+// (常に固定)なので、置き場・レーン0の売買ポイントも定数として扱える。COUNTER_Z_FROM/PLAZA_MIN_Zは
+// 拠点拡張のたびに北へ動くためletにし、recomputeBaseLayout()で再計算する
+let COUNTER_Z_FROM;        // カウンター北端(この1マス北の行は壁のまま。拠点拡張で北へ伸びる)
+const COUNTER_Z_TO = BASE_MAX_Z - 1;   // カウンター南端(この1マス南=BASE_MAX_Zの行は壁のまま。拡張の対象外・常に固定)
 const TRADE_LANE_MAX   = AUTOMATION_MAX + 1; // 売買レーンの配列上限(プレイヤー用1+自動化最大10)
 const TRADE_LANE_GAP   = 2; // レーン間の間隔(マス)。客NPCの退場時の横移動先(+1マス)がレーン間の空きに収まる
-function tradeLaneZ(i){ return COUNTER_Z_FROM + 1 + i*TRADE_LANE_GAP; } // レーンiの取引ポイントz(置き場のすぐ南から順に並ぶ)
+function tradeLaneZ(i){ return COUNTER_Z_TO - 1 - i*TRADE_LANE_GAP; } // レーンiの取引ポイントz(置き場のすぐ北から、北へ順に並ぶ)
 function tradeLaneTradePt(i){ return { x: BASE_MIN_X, z: tradeLaneZ(i) }; }
 function tradeLaneNpcPos(i){ return { x: BASE_MIN_X+1, z: tradeLaneZ(i) }; } // 自動化NPCの立ち位置(カウンター内側)
-let TRADE_PT;                // レーン0=プレイヤー用の売買するポイント(既存名を維持)
+const DEPOSIT_PT = { x: BASE_MIN_X, z: COUNTER_Z_TO };  // 木材を置くポイント(カウンター最南端。COUNTER_Z_TOは固定なので定数)
+const TRADE_PT = tradeLaneTradePt(0);                    // レーン0=プレイヤー用の売買するポイント(既存名を維持。同じく固定)
 const NPC_COUNTER_PT   = { x:BASE_MAX_X-1, z:-2 }; // 雇用NPCの初期スポーン地点(雇用は「雇用」タブから行う。エリア歩行はなし)
 const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 
@@ -584,12 +585,11 @@ function maxTradeLanesFit(){
   return Math.floor((span - 1) / TRADE_LANE_GAP) + 1;
 }
 // 拠点拡張(state.baseExpansion.level)に応じて、拠点の南北範囲と、それに連動する各種座標を再計算する。
-// セーブの読み込み直後・拠点拡張の購入直後の両方で呼び出す
+// セーブの読み込み直後・拠点拡張の購入直後の両方で呼び出す。DEPOSIT_PT/TRADE_PTはCOUNTER_Z_TO
+// (拡張の対象外・常に固定)にanchorしているため、ここでの再計算は不要(定数として宣言済み)
 function recomputeBaseLayout(s){
   BASE_MIN_Z = BASE_MIN_Z_INITIAL - s.baseExpansion.level * BASE_EXPANSION_STEP;
   COUNTER_Z_FROM = BASE_MIN_Z + 1;
-  DEPOSIT_PT = { x: BASE_MIN_X, z: COUNTER_Z_FROM };
-  TRADE_PT = tradeLaneTradePt(0);
   PLAZA_MIN_Z = BASE_MIN_Z;
 }
 
@@ -601,8 +601,9 @@ const FOREST_MAX_X = BASE_MAX_X;    // 東端は拠点と同じ(変更なし)
 // 収集ボックスはどちらも拠点内にまとめて設置し、プレイヤーが拠点から出ずに回収できるようにする
 const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシンの初期位置(森。導入後は担当の木まで歩いて移動する)
 const AUTO_BOX_WOOD_PT  = { x:DOOR_TO+1, z:BASE_MAX_Z };        // 木材収集ボックス(木材伐採エリアの扉の東側、拠点側)
-// G収集ボックス(カウンターの南端から東に1マス)。ただしx:BASE_MIN_X+1はtradeLaneNpcPos(5)
-// (=z:COUNTER_Z_TOとちょうど一致)と重なってしまうため、常駐NPCの列からもう1マス東へ離す
+// G収集ボックス(カウンターの南端、置き場(DEPOSIT_PT)から東に2マス)。自動化NPCの列
+// (tradeLaneNpcPos(i)、i>=1)はレーン0(=COUNTER_Z_TO-1)よりさらに北にしか並ばないため、
+// z:COUNTER_Z_TOに置いても衝突しない
 const AUTO_BOX_GOLD_PT  = { x:BASE_MIN_X+2, z:COUNTER_Z_TO };
 // 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
@@ -1197,38 +1198,58 @@ function updateAutomationVisuals(now){
 }
 
 // 木材自動運搬(ベルトコンベア)の3Dオブジェクト。木材収集ボックス(AUTO_BOX_WOOD_PT)から
-// 置き場(DEPOSIT_PT、拠点拡張で北へ動く)まで斜めに1本渡し、ベルト本体+スラット(横縞)+
-// 運搬中の木材(3個、ループ移動)で構成する。ベルト本体のローカルX軸を運搬方向に合わせて
-// group全体をY軸回転させる
-function buildTransportBeltMesh(){
-  const from = AUTO_BOX_WOOD_PT, to = DEPOSIT_PT;
-  const dx = to.x - from.x, dz = to.z - from.z;
-  const len = Math.max(0.5, Math.sqrt(dx*dx + dz*dz));
-  const g = new THREE.Group();
-  g.position.set((from.x+to.x)/2, 0, (from.z+to.z)/2);
-  g.rotation.y = -Math.atan2(dz, dx); // ローカル+X(長さ方向)がDEPOSIT_PT側を向くようにする
-
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(len, 0.08, 0.5), new THREE.MeshStandardMaterial({ color:0x3a3f47 }));
-  belt.position.y = 0.06;
-  g.add(belt);
-  const slatCount = Math.max(3, Math.round(len*1.5));
+// 置き場(DEPOSIT_PT)まで、斜めの1本ではなく軸に沿った折れ線(L字)で結ぶ: まず木材ボックスと
+// 同じ行(z)を置き場のxまで直進し、そこで1回だけ曲がって置き場のzまで直進する。どちらの区間も
+// x軸/z軸のどちらかに平行なので、回転を使わずBoxGeometryの寸法だけで各区間を組み立てられる。
+// 折れ点(bend point)の位置は「木材ボックスの行のまま、置き場のxまで進んだ点」に固定しているため、
+// 折れ点の並び順を変えたいとき(例: 先にzを合わせてからxを進む)はここだけ直せばよい
+function transportBendPoint(){
+  return { x: DEPOSIT_PT.x, z: AUTO_BOX_WOOD_PT.z };
+}
+// 区間(fromPt→toPt、軸に沿った直線であること)の見た目(本体+スラット)をgroupへ追加し、その長さを返す
+function addBeltSegment(group, fromPt, toPt){
+  const dx = toPt.x - fromPt.x, dz = toPt.z - fromPt.z;
+  const len = Math.max(0.5, Math.abs(dx) + Math.abs(dz)); // 軸平行前提(dx/dzのどちらかは0)
+  const alongX = Math.abs(dx) >= Math.abs(dz);
+  const midX = (fromPt.x + toPt.x) / 2, midZ = (fromPt.z + toPt.z) / 2;
+  const belt = new THREE.Mesh(
+    new THREE.BoxGeometry(alongX ? len : 0.5, 0.08, alongX ? 0.5 : len),
+    new THREE.MeshStandardMaterial({ color:0x3a3f47 }));
+  belt.position.set(midX, 0.06, midZ);
+  group.add(belt);
+  const slatCount = Math.max(2, Math.round(len*1.5));
   for(let i=0;i<slatCount;i++){
-    const slat = new THREE.Mesh(new THREE.BoxGeometry(0.07,0.1,0.54), new THREE.MeshStandardMaterial({ color:0x585f6b }));
-    slat.position.set(-len/2 + (i+0.5)*(len/slatCount), 0.105, 0);
-    g.add(slat);
+    const t = -len/2 + (i+0.5)*(len/slatCount);
+    const slat = new THREE.Mesh(
+      new THREE.BoxGeometry(alongX ? 0.07 : 0.54, 0.1, alongX ? 0.54 : 0.07),
+      new THREE.MeshStandardMaterial({ color:0x585f6b }));
+    slat.position.set(midX + (alongX ? t : 0), 0.105, midZ + (alongX ? 0 : t));
+    group.add(slat);
   }
+  return len;
+}
+function buildTransportBeltMesh(){
+  const boxPt = AUTO_BOX_WOOD_PT, depositPt = DEPOSIT_PT, bendPt = transportBendPoint();
+  const g = new THREE.Group(); // 区間はworld.group基準の絶対座標で配置するので、g自体に位置/回転は持たせない
+
+  const lenA = addBeltSegment(g, boxPt, bendPt);
+  const lenB = addBeltSegment(g, bendPt, depositPt);
 
   const packets = [];
   const packetCount = 3;
   for(let i=0;i<packetCount;i++){
-    // 小さな木材の束(箱)。ベルトのローカルX軸=運搬方向にそのまま沿うので、追加の回転は不要
-    const packet = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.22,0.32), new THREE.MeshStandardMaterial({ color:0x8a6b3f }));
+    // 小さな木材の束(箱)。各区間は軸平行なので、packetの位置はworld座標を直接計算するだけでよく回転は不要
+    const packet = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.22,0.3), new THREE.MeshStandardMaterial({ color:0x8a6b3f }));
     packet.position.y = 0.2;
     g.add(packet);
     packets.push(packet);
   }
 
-  g.userData.length = len;
+  g.userData.boxPt = boxPt;
+  g.userData.bendPt = bendPt;
+  g.userData.depositPt = depositPt;
+  g.userData.lenA = lenA;
+  g.userData.totalLength = lenA + lenB;
   g.userData.packets = packets;
   return g;
 }
@@ -1245,23 +1266,39 @@ function syncTransportBelt(){
     world.transportBelt = null;
   }
 }
-// 拠点拡張でDEPOSIT_PTが動いたときなど、ベルトが導入済みなら座標ごと作り直す
+// 拠点拡張などでDEPOSIT_PT/AUTO_BOX_WOOD_PTの位置関係が変わりうる場合に備え、ベルトが導入済みなら
+// 座標ごと作り直す(現状はどちらもCOUNTER_Z_TO/BASE_MAX_Zにanchorした定数のため実際には毎回同じ
+// 形になるが、将来レイアウトが変わっても安全なように呼び続ける)
 function rebuildTransportBelt(){
   if(!world || !world.transportBelt) return;
   world.group.remove(world.transportBelt);
   world.transportBelt = null;
   syncTransportBelt();
 }
-// ベルトコンベア上の木材(3個)を、運搬効率(個/秒)に応じた速さでループ移動させる(演出のみ)
+// ベルトコンベア上の木材(3個)を、運搬効率(個/秒)に応じた速さで折れ線に沿ってループ移動させる(演出のみ)。
+// 経路全体の長さ(区間A+区間B)を1周期とし、区間Aの範囲内かどうかで単純な線形補間の対象を切り替える
 function updateTransportBeltVisual(now){
   if(!world || !world.transportBelt) return;
-  const len = world.transportBelt.userData.length;
+  const ud = world.transportBelt.userData;
+  const total = ud.totalLength;
   const lv = state.automation.transport.level;
   const speed = 1.0 + Math.max(0, lv-1)*0.12; // マス/秒(見た目用。レベルが上がるほど心持ち速く見せる)
   const t = now/1000;
-  world.transportBelt.userData.packets.forEach((packet, i)=>{
-    const phase = ((t*speed + i*(len/3)) % len + len) % len;
-    packet.position.x = -len/2 + phase;
+  ud.packets.forEach((packet, i)=>{
+    const phase = ((t*speed + i*(total/3)) % total + total) % total;
+    let x, z;
+    if(phase <= ud.lenA){
+      const f = ud.lenA > 0 ? phase/ud.lenA : 0;
+      x = ud.boxPt.x + (ud.bendPt.x - ud.boxPt.x)*f;
+      z = ud.boxPt.z + (ud.bendPt.z - ud.boxPt.z)*f;
+    } else {
+      const lenB = total - ud.lenA;
+      const f = lenB > 0 ? (phase - ud.lenA)/lenB : 0;
+      x = ud.bendPt.x + (ud.depositPt.x - ud.bendPt.x)*f;
+      z = ud.bendPt.z + (ud.depositPt.z - ud.bendPt.z)*f;
+    }
+    packet.position.x = x;
+    packet.position.z = z;
   });
 }
 
@@ -1324,8 +1361,9 @@ function rebuildStaticGeometry(){
   buildStaticGeometry();
   updateWoodPile(); // 新しいpileLogs/depositMarkに、現在の木材量を反映する
 }
-// 拠点拡張で売買レーンの座標(tradeLaneZ)がすべて動くため、既存の客NPCの列・常駐売買NPCの表示位置を
-// 新しい座標に合わせて並べ直す(レーン0=プレイヤー用の列も含む)
+// 売買レーンの座標(tradeLaneZ)は現在COUNTER_Z_TO(固定)にanchorしているため拠点拡張では動かないが、
+// 将来レイアウトが変わっても既存の客NPCの列・常駐売買NPCの表示位置が追従するよう、拠点拡張の
+// 購入直後に呼び続ける(現状は実質的に何も動かさない、無害な再配置)
 function repositionAllTradeLanes(){
   if(!world) return;
   for(let lane=0; lane<TRADE_LANE_MAX; lane++){
