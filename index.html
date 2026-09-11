@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.11.0">
+<meta name="app-version" content="0.12.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -146,7 +146,7 @@
   .scene-wrap{
     position:relative; border-radius:12px; overflow:hidden;
     border:2px solid #2f4a22; box-shadow:var(--shadow);
-    background:#0c1a10; height:300px;
+    background:#0c1a10; height:460px;
   }
   .scene-wrap canvas{display:block; width:100%; height:100%; touch-action:none;}
   .hud{
@@ -389,7 +389,9 @@ function defaultState(){
     // 生産物は自動化収集ボックス(木材収集ボックス=boxWood/G収集ボックス=boxGold)に貯まり、
     // どちらも拠点内に設置されるので、プレイヤーは拠点から出ずに回収できる
     automation: {
-      harvest: { level:0, boxWood:0 },
+      // treeIdx/pos/progress/arrived/stepTimerは伐採マシンが実際に木まで歩いて伐る挙動の管理用
+      // (雇用NPCのw.treeIdx/w.pos/w.arrivedと同じ考え方)
+      harvest: { level:0, boxWood:0, treeIdx:null, pos:null, progress:0, arrived:false, stepTimer:0 },
       trade:   { level:0, boxGold:0 }
     },
     automationLastTick: Date.now()
@@ -411,6 +413,11 @@ function load(){
     if(!parsed.upgrades) parsed.upgrades = { amount:0, speed:0, price:0 };
     if(!parsed.automation) parsed.automation = { harvest:{level:0,boxWood:0}, trade:{level:0,boxGold:0} };
     if(!parsed.automation.harvest) parsed.automation.harvest = { level:0, boxWood:0 };
+    if(parsed.automation.harvest.treeIdx === undefined) parsed.automation.harvest.treeIdx = null;
+    if(parsed.automation.harvest.pos === undefined) parsed.automation.harvest.pos = null;
+    if(parsed.automation.harvest.progress === undefined) parsed.automation.harvest.progress = 0;
+    if(parsed.automation.harvest.arrived === undefined) parsed.automation.harvest.arrived = false;
+    if(parsed.automation.harvest.stepTimer === undefined) parsed.automation.harvest.stepTimer = 0;
     if(!parsed.automation.trade) parsed.automation.trade = { level:0, boxGold:0 };
     if(!parsed.automationLastTick) parsed.automationLastTick = Date.now();
     delete parsed.hiredJob; delete parsed.boxWood; delete parsed.autoSell; delete parsed.player.map; // 旧仕様の名残を掃除(拠点と森を1枚のマップに統合)
@@ -469,9 +476,8 @@ const TILE = 1;                         // 1マスのサイズ
 const BASE_MIN = -3, BASE_MAX = 3;      // 拠点ゾーン(7x7マス)
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
 const DOOR_Z = BASE_MAX + 1;            // 門の位置(拠点のすぐ南)
-const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z
-const FOREST_MAX_Z = FOREST_MIN_Z + 6;  // 森ゾーンの南端(木を9本、等間隔に配置)
-const WORLD_MIN_X = BASE_MIN, WORLD_MAX_X = BASE_MAX; // 森も拠点と同じ幅を使う
+const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
+const FOREST_MAX_Z = FOREST_MIN_Z + 6;  // 森ゾーンの南端
 const STEP_DURATION = 0.14;             // 1マス移動にかける時間(秒)
 const WORKER_STEP_DURATION = 0.18;      // 雇用NPCが1マス移動するのにかける時間(秒)
 const INTERACT_RADIUS = 1.1;            // 隣接マス(距離1)から操作できるように
@@ -507,8 +513,11 @@ function tradeRewardGold(){ return TRADE_REWARD_GOLD_BASE + state.upgrades.price
 //     単発雇用NPC(HIRE_COST/HIRE_YIELD)とは別枠。生産物は拠点内の収集ボックス(木材用/G用)に貯まる ---
 const AUTOMATION_UNLOCK_COST = 500;     // 初回導入(Lv.0→1)に必要なゴールド
 const AUTOMATION_MAX = 5;               // 自動化の最大レベル
-const AUTOMATION_HARVEST_RATE_BASE = 1;       // 伐採マシンLv.1の生産速度(個/秒)
-const AUTOMATION_HARVEST_RATE_PER_LEVEL = 0.6; // レベルごとの増加量
+// 伐採マシン: 実際に木まで歩いて1本を仕上げる方式。仕上げにかかる秒数がレベルごとに短縮する
+// (収穫量は通常の伐採と同じ木を伐るのでwoodPerTree()をそのまま使う)
+const AUTOMATION_HARVEST_SECONDS_BASE = 6;      // Lv.1で1本を仕上げるのにかかる秒数
+const AUTOMATION_HARVEST_SECONDS_PER_LEVEL = 0.8; // レベルごとに短縮する秒数
+const AUTOMATION_HARVEST_SECONDS_MIN = 1.5;     // これ以上は短縮しない下限
 const AUTOMATION_SELL_RATE_BASE = 2;          // 常駐売買NPC Lv.1の受け渡し速度(個/秒)
 const AUTOMATION_SELL_RATE_PER_LEVEL = 1.2;    // レベルごとの増加量
 function automationCost(kind){ // レベルアップのコストは大幅に高騰させる(導入時はAUTOMATION_UNLOCK_COST固定)
@@ -517,9 +526,10 @@ function automationCost(kind){ // レベルアップのコストは大幅に高�
   if(lv === 0) return AUTOMATION_UNLOCK_COST;
   return Math.round(AUTOMATION_UNLOCK_COST * Math.pow(2.2, lv));
 }
-function harvestMachineRateFor(lv){ return lv>0 ? AUTOMATION_HARVEST_RATE_BASE + (lv-1)*AUTOMATION_HARVEST_RATE_PER_LEVEL : 0; }
+function automationHarvestSecondsFor(lv){
+  return lv>0 ? Math.max(AUTOMATION_HARVEST_SECONDS_MIN, AUTOMATION_HARVEST_SECONDS_BASE - (lv-1)*AUTOMATION_HARVEST_SECONDS_PER_LEVEL) : 0;
+}
 function tradeMachineRateFor(lv){ return lv>0 ? AUTOMATION_SELL_RATE_BASE + (lv-1)*AUTOMATION_SELL_RATE_PER_LEVEL : 0; }
-function harvestMachineRate(){ return harvestMachineRateFor(state.automation.harvest.level); }
 function tradeMachineRate(){ return tradeMachineRateFor(state.automation.trade.level); }
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
@@ -535,17 +545,21 @@ const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
 const PLAZA_MIN_X = PLAZA_MAX_X - 6;
 const PLAZA_MIN_Z = -3, PLAZA_MAX_Z = 3;
 
+// 木材伐採エリア(森)の横幅: 客待機エリアの西端まで拡張(縦方向=z方向は拠点と同じ幅のまま)
+const FOREST_MIN_X = PLAZA_MIN_X;   // 西端は客待機エリアの西端に揃える
+const FOREST_MAX_X = BASE_MAX;      // 東端は拠点と同じ(変更なし)
+
 // 全自動化の設置位置。マシン/NPC本体は稼働場所(森・売買カウンター)に置くが、
 // 収集ボックスはどちらも拠点内にまとめて設置し、プレイヤーが拠点から出ずに回収できるようにする
-const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシン(森の空きマス、木の並びの南。生産のみ、ボックスはここには置かない)
-const AUTO_BOX_WOOD_PT  = { x:BASE_MIN+1, z:0 };      // 木材収集ボックス(拠点、常駐売買NPCのすぐ隣)
-const AUTO_BOX_GOLD_PT  = { x:BASE_MIN, z:0 };        // G収集ボックス(拠点、置き場と売買ポイントの間)
+const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシンの初期位置(森。導入後は担当の木まで歩いて移動する)
+const AUTO_BOX_WOOD_PT  = { x:0, z:BASE_MAX };        // 木材収集ボックス(拠点、伐採エリアの扉のすぐ手前)
+const AUTO_BOX_GOLD_PT  = { x:BASE_MAX-2, z:2 };      // G収集ボックス(拠点、効率化ポイントのすぐ隣)
 const AUTO_TRADE_NPC_PT = { x:BASE_MIN+1, z:1 };      // 常駐売買NPCの立ち位置(売買ポイントのすぐ隣)
 
-// 森ゾーン: 木を9本、等間隔(3×3)に配置
+// 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)
 const TREE_DEFS = [];
 for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5]){
-  for(const tx of [-2,0,2]){
+  for(let tx = FOREST_MIN_X+1; tx <= FOREST_MAX_X-1; tx += 2){
     TREE_DEFS.push({ x:tx, z:tz });
   }
 }
@@ -562,6 +576,7 @@ let lastFrameTime = null;
 let doorSwing = 0;          // 扉の開き具合(0=閉,1=開)。プレイヤーが近づくと自動で開閉する(演出のみ、移動はブロックしない)
 let activeModal = null;     // "eff" | "npc" | null (キーボード操作の対象になっているモーダル)
 let modalSelIndex = 0;      // モーダル内の選択インデックス(矢印キーで移動)
+let exitingNpcs = [];       // 取引完了後、退場アニメーション中の客NPC(右へ2マス→列の後方側へ1マスずつ、待機エリア外で消滅)
 
 function distTo(x,z,px,pz){ const dx=x-px, dz=z-pz; return Math.sqrt(dx*dx+dz*dz); }
 function inDoorGap(x){ return x >= DOOR_FROM && x <= DOOR_TO; }
@@ -571,7 +586,7 @@ function inDoorGap(x){ return x >= DOOR_FROM && x <= DOOR_TO; }
 function blocked(x,z){
   if(z >= BASE_MIN && z <= BASE_MAX) return x < BASE_MIN || x > BASE_MAX; // 拠点ゾーン(西端=木材売買カウンター)
   if(z === DOOR_Z) return !inDoorGap(x); // 門(扉の幅だけ通れる)
-  if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z) return x < WORLD_MIN_X || x > WORLD_MAX_X; // 森ゾーン
+  if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z) return x < FOREST_MIN_X || x > FOREST_MAX_X; // 森ゾーン(客待機エリアまで拡張した横幅)
   return true; // 範囲外
 }
 
@@ -588,32 +603,41 @@ function addPad(group, x,z,color){
   group.add(mesh);
 }
 function buildGround(group){
-  const width = (WORLD_MAX_X - WORLD_MIN_X + 1) + 1; // 壁-壁の幅
+  const baseWidth = (BASE_MAX - BASE_MIN + 1) + 1;      // 壁-壁の幅(拠点)
+  const forestWidth = (FOREST_MAX_X - FOREST_MIN_X + 1) + 1; // 壁-壁の幅(森。客待機エリアまで拡張)
+  const forestCx = (FOREST_MIN_X + FOREST_MAX_X) / 2;
   const baseZLen = (BASE_MAX - BASE_MIN + 1) + 1;
   const forestZLen = (FOREST_MAX_Z+1) - DOOR_Z;
-  addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, width, 0.2, baseZLen); // 拠点ゾーンの地面(草)
-  addBox(group, new THREE.MeshStandardMaterial({color:0x3f5e2f}), 0,-0.1,(DOOR_Z+FOREST_MAX_Z+1)/2, width, 0.2, forestZLen); // 森ゾーンの地面
+  addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, baseWidth, 0.2, baseZLen); // 拠点ゾーンの地面(草)
+  addBox(group, new THREE.MeshStandardMaterial({color:0x3f5e2f}), forestCx,-0.1,(DOOR_Z+FOREST_MAX_Z+1)/2, forestWidth, 0.2, forestZLen); // 森ゾーンの地面
   const plazaCx = (PLAZA_MIN_X+PLAZA_MAX_X)/2, plazaCz = (PLAZA_MIN_Z+PLAZA_MAX_Z)/2;
   addBox(group, new THREE.MeshStandardMaterial({color:0x8a6f4a}), plazaCx,-0.1,plazaCz, 7, 0.2, 7); // 客NPC待機エリアの地面(土の広場)
 }
+// 拠点(幅7)と森(客待機エリアまで拡張した幅)は横幅が異なるため、東西の柵は扉の行(DOOR_Z)を境に
+// 幅が切り替わる2段構成にする(扉の行そのものは森側の幅いっぱいに、扉の隙間だけ開ける)
 function buildFence(group){
   const mat = new THREE.MeshStandardMaterial({ color:0x8a6b3f });
   const postMat = new THREE.MeshStandardMaterial({ color:0x5a4128 });
-  const zSpan = (FOREST_MAX_Z+1) - (BASE_MIN-1);
-  const zMid = ((BASE_MIN-1) + (FOREST_MAX_Z+1)) / 2;
-  const width = (WORLD_MAX_X - WORLD_MIN_X + 1);
-  addBox(group, mat, 0, 0.8, BASE_MIN-1, width, 1.6, 0.4);            // 北(拠点)
-  addBox(group, mat, WORLD_MAX_X+1, 0.8, zMid, 0.4, 1.6, zSpan);      // 東(拠点〜森まで通し)
-  // 西(拠点〜森まで通し。木材売買カウンターの範囲だけ切れ目にして、カウンター本体で塞ぐ)
+  const baseWidth = (BASE_MAX - BASE_MIN + 1);
+  const forestWidth = (FOREST_MAX_X - FOREST_MIN_X + 1);
+  addBox(group, mat, 0, 0.8, BASE_MIN-1, baseWidth, 1.6, 0.4);              // 北(拠点)
+  // 東: 拠点部分(拠点幅、扉の行まで)+ 森部分(森幅、扉の行から南)
+  const baseEastZLen = DOOR_Z - (BASE_MIN-1);
+  addBox(group, mat, BASE_MAX+1, 0.8, ((BASE_MIN-1)+DOOR_Z)/2, 0.4, 1.6, baseEastZLen);
+  const forestSideZLen = (FOREST_MAX_Z+1) - DOOR_Z;
+  addBox(group, mat, FOREST_MAX_X+1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
+  // 西: 拠点部分(木材売買カウンターの範囲だけ切れ目にして、カウンター本体で塞ぐ)+ 森部分(森幅、扉の行から南)
   const cZFrom = DEPOSIT_PT.z - 0.5, cZTo = TRADE_PT.z + 0.5; // カウンターの占めるz範囲
   const westNorthLen = cZFrom - (BASE_MIN-1);
-  const westSouthLen = (FOREST_MAX_Z+1) - cZTo;
-  addBox(group, mat, WORLD_MIN_X-1, 0.8, ((BASE_MIN-1)+cZFrom)/2, 0.4, 1.6, westNorthLen);
-  addBox(group, mat, WORLD_MIN_X-1, 0.8, (cZTo+(FOREST_MAX_Z+1))/2, 0.4, 1.6, westSouthLen);
-  const doorLeftW = DOOR_FROM - (WORLD_MIN_X-1), doorRightW = (WORLD_MAX_X+1) - DOOR_TO;
-  addBox(group, mat, ((WORLD_MIN_X-1)+DOOR_FROM)/2, 0.8, DOOR_Z, doorLeftW, 1.6, 0.4);   // 門の行・西側
-  addBox(group, mat, (DOOR_TO+(WORLD_MAX_X+1))/2, 0.8, DOOR_Z, doorRightW, 1.6, 0.4);    // 門の行・東側
-  addBox(group, mat, 0, 0.8, FOREST_MAX_Z+1, width, 1.6, 0.4);        // 南(森)
+  const westMidLen = DOOR_Z - cZTo;
+  addBox(group, mat, BASE_MIN-1, 0.8, ((BASE_MIN-1)+cZFrom)/2, 0.4, 1.6, westNorthLen);
+  addBox(group, mat, BASE_MIN-1, 0.8, (cZTo+DOOR_Z)/2, 0.4, 1.6, westMidLen);
+  addBox(group, mat, FOREST_MIN_X-1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
+  // 門の行(森幅いっぱいに、扉の隙間だけ開ける)
+  const doorLeftW = DOOR_FROM - (FOREST_MIN_X-1), doorRightW = (FOREST_MAX_X+1) - DOOR_TO;
+  addBox(group, mat, ((FOREST_MIN_X-1)+DOOR_FROM)/2, 0.8, DOOR_Z, doorLeftW, 1.6, 0.4);   // 門の行・西側
+  addBox(group, mat, (DOOR_TO+(FOREST_MAX_X+1))/2, 0.8, DOOR_Z, doorRightW, 1.6, 0.4);    // 門の行・東側
+  addBox(group, mat, (FOREST_MIN_X+FOREST_MAX_X)/2, 0.8, FOREST_MAX_Z+1, forestWidth, 1.6, 0.4); // 南(森)
   addBox(group, postMat, DOOR_FROM, 1.1, DOOR_Z, 0.3, 2.2, 0.3);      // 門柱
   addBox(group, postMat, DOOR_TO, 1.1, DOOR_Z, 0.3, 2.2, 0.3);
 }
@@ -792,10 +816,12 @@ function setTreeVisual(t){
   if(t.state === "tree"){ trunk.scale.set(1,1,1); trunk.position.y = 0.65; leaves.visible = true; }
   else { trunk.scale.set(1,0.25,1); trunk.position.y = 0.16; leaves.visible = false; }
 }
-// 指定した木が(プレイヤー手動・伐採NPC問わず)現在伐採中かどうか
+// 指定した木が(プレイヤー手動・伐採NPC・伐採マシン問わず)現在伐採中かどうか
 function isTreeBeingHarvested(idx){
   if(idx === harvestingTreeIdx) return true;
-  return state.harvestWorkers.some(w => w.treeIdx === idx && w.arrived);
+  if(state.harvestWorkers.some(w => w.treeIdx === idx && w.arrived)) return true;
+  const m = state.automation.harvest;
+  return m.level > 0 && m.treeIdx === idx && m.arrived;
 }
 // 伐採中の木だけ、落ち葉パーティクルを円を描きながら舞い落とす(毎フレーム呼び出す)
 function updateTreeLeafEffects(now){
@@ -863,10 +889,42 @@ function repositionNpcQueue(){
     npc.mesh.position.set(pos.x, 0, pos.z);
   });
 }
+// 取引完了後の客NPCの退場アニメーション(毎フレーム呼び出す)。
+// まず右(奥)へ2マス横移動(sidestep)してから、列の後方側(西、PLAZA_MIN_X方向)へ1マスずつ歩き(walk)、
+// 待機エリア外(PLAZA_MIN_Xより西)に出たタイミングで消滅させる
+function updateExitingNpcs(dt){
+  for(let i = exitingNpcs.length-1; i >= 0; i--){
+    const npc = exitingNpcs[i];
+    npc.stepTimer = (npc.stepTimer||0) - dt;
+    if(npc.stepTimer > 0) continue;
+    npc.stepTimer = WORKER_STEP_DURATION;
+    if(npc.exitPhase === "sidestep"){
+      if(npc.pos.z < npc.exitTargetZ) npc.pos.z += 1;
+      else npc.exitPhase = "walk";
+    } else {
+      npc.pos.x -= 1;
+      if(npc.pos.x < PLAZA_MIN_X){
+        if(npc.mesh && world) world.group.remove(npc.mesh);
+        exitingNpcs.splice(i,1);
+        continue;
+      }
+    }
+    if(npc.mesh) npc.mesh.position.set(npc.pos.x, 0, npc.pos.z);
+  }
+}
 // target: "player"(既定、代金を即ゴールドへ) | "box"(売買自動化用。代金は収集ボックスへ貯める)
 function completeFrontNpcPurchase(target){
   const npc = npcQueue.shift();
-  if(npc && npc.mesh && world) world.group.remove(npc.mesh);
+  if(npc){
+    // 取引完了後もすぐには消さず、退場アニメーションへ切り替える(右へ2マス→列の後方側へ1マスずつ、
+    // 待機エリア外に出たら消滅)。先頭にいた座標からスタート
+    const frontPos = npcSlotPos(0);
+    npc.pos = { x: frontPos.x, z: frontPos.z };
+    npc.exitTargetZ = frontPos.z + 2;
+    npc.exitPhase = "sidestep";
+    npc.stepTimer = 0;
+    exitingNpcs.push(npc);
+  }
   const reward = tradeRewardGold();
   if(target === "box"){
     state.automation.trade.boxGold += reward; // 現地(常駐NPCのそば)で回収するまで蓄積、トーストは出さない
@@ -934,7 +992,7 @@ function buildCollectionBoxMesh(accentColor){
   g.add(lid);
   return g;
 }
-// 伐採マシン(森に設置。回転する集材ファンネルを持つ簡易な機械。収集ボックスはここには置かず拠点側に集約する)
+// 伐採マシン(森を歩き回り、担当の木まで移動して伐採する。収集ボックスはここには置かず拠点側に集約する)
 function buildAutomationHarvestMesh(){
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.6,0.7), new THREE.MeshStandardMaterial({color:0x6b6f78}));
@@ -942,6 +1000,12 @@ function buildAutomationHarvestMesh(){
   const funnel = new THREE.Mesh(new THREE.ConeGeometry(0.3,0.4,4), new THREE.MeshStandardMaterial({color:0xe0a83f}));
   funnel.position.y = 0.75; funnel.name = "funnel";
   g.add(body, funnel);
+  // 伐採NPCと同様、担当の木のそばで作業中だけ表示する伐採エフェクト(木くず)
+  const chip = new THREE.Mesh(new THREE.ConeGeometry(0.09,0.16,5), new THREE.MeshStandardMaterial({color:0xc98a4b}));
+  chip.name = "effect";
+  chip.position.set(0.4, 1.0, 0);
+  chip.visible = false;
+  g.add(chip);
   g.position.set(AUTO_HARVEST_PT.x, 0, AUTO_HARVEST_PT.z);
   return g;
 }
@@ -984,11 +1048,22 @@ function syncAutomationMeshes(){
     world.autoTradeNpcMesh = null; world.autoGoldBoxMesh = null;
   }
 }
-// 伐採マシンのファンネルをゆっくり回転させ、稼働中であることを表現する(毎フレーム呼び出す)
+// 伐採マシンの位置・伐採エフェクトの見た目を毎フレーム更新する(伐採NPCのupdateHarvestWorkerVisualsと同じ方式)
 function updateAutomationVisuals(now){
   if(!world || !world.autoHarvestMesh) return;
+  const m = state.automation.harvest;
+  const pos = m.pos || AUTO_HARVEST_PT;
+  world.autoHarvestMesh.position.set(pos.x, 0, pos.z);
   const funnel = world.autoHarvestMesh.getObjectByName("funnel");
-  if(funnel) funnel.rotation.y = now/1000;
+  if(funnel) funnel.rotation.y = now/1000; // 常にゆっくり回転し、稼働中であることを表現
+  const eff = world.autoHarvestMesh.getObjectByName("effect");
+  if(eff){
+    eff.visible = !!m.arrived;
+    if(m.arrived){
+      eff.position.y = 1.0 + Math.sin(now/150)*0.08;
+      eff.rotation.y = now/300;
+    }
+  }
 }
 
 // --- 3D座標→画面座標(ポイントのラベル表示に使用) -------------------------
@@ -1204,10 +1279,52 @@ function updateInteractions(dt){
 // 伐採NPCは他のNPCが使っていない木を1本担当として割り当てる(木9本・上限5体なので必ず空きがある)
 function assignTreeToWorker(w){
   const used = new Set(state.harvestWorkers.filter(x=>x!==w && x.treeIdx!=null).map(x=>x.treeIdx));
+  if(state.automation.harvest.treeIdx != null) used.add(state.automation.harvest.treeIdx); // 伐採マシンの担当木も避ける
   for(let i=0;i<trees.length;i++){
     if(!used.has(i)){ w.treeIdx = i; return; }
   }
   w.treeIdx = null;
+}
+// --- 伐採マシン(全自動化)の木への移動・割り当て --------------------------
+// 雇用NPCと違い、実際に個々の木を伐る(t.state/t.progressを操作)ため、まだ「tree」状態の木だけを選ぶ。
+// 雇用NPCが担当中の木も避け、現在地から最も近い木を選ぶ
+function assignTreeToMachine(){
+  const m = state.automation.harvest;
+  const used = new Set(state.harvestWorkers.filter(x=>x.treeIdx!=null).map(x=>x.treeIdx));
+  const pos = m.pos || AUTO_HARVEST_PT;
+  let best = -1, bestDist = Infinity;
+  for(let i=0;i<trees.length;i++){
+    if(trees[i].state !== "tree" || used.has(i)) continue;
+    const d = distTo(trees[i].x, trees[i].z, pos.x, pos.z);
+    if(d < bestDist){ bestDist = d; best = i; }
+  }
+  m.treeIdx = best >= 0 ? best : null;
+  m.progress = 0;
+  m.arrived = false;
+}
+// 割り当て先が無効(未割り当て・すでに伐採済み)になっていたら再割り当てする。冪等なので何度呼んでもよい
+function ensureMachineTarget(){
+  const m = state.automation.harvest;
+  if(m.level <= 0) return;
+  if(!m.pos) m.pos = { x: AUTO_HARVEST_PT.x, z: AUTO_HARVEST_PT.z };
+  if(m.treeIdx != null && trees[m.treeIdx] && trees[m.treeIdx].state === "tree") return;
+  assignTreeToMachine();
+}
+// 伐採マシンを1マスずつ担当の木へ歩かせる(毎フレーム呼び出す。雇用NPCの歩行と同じ方式)
+function updateAutomationHarvestWalk(dt){
+  const m = state.automation.harvest;
+  if(m.level <= 0) return;
+  ensureMachineTarget();
+  if(m.treeIdx == null) return; // 空いている木が無い
+  const t = trees[m.treeIdx];
+  if(m.pos.x === t.x && m.pos.z === t.z){ m.arrived = true; return; }
+  m.arrived = false;
+  m.stepTimer = (m.stepTimer||0) - dt;
+  if(m.stepTimer <= 0){
+    if(m.pos.x !== t.x) m.pos.x += Math.sign(t.x - m.pos.x);
+    else if(m.pos.z !== t.z) m.pos.z += Math.sign(t.z - m.pos.z);
+    m.stepTimer = WORKER_STEP_DURATION;
+  }
 }
 function hireWorker(kind){
   const arr = kind === "harvest" ? state.harvestWorkers : state.sellWorkers;
@@ -1286,13 +1403,31 @@ function processAutomation(now){
   state.automationLastTick = now;
   if(elapsedSec <= 0) return;
   let changed = false;
-  if(state.automation.harvest.level > 0){
-    const produced = elapsedSec * harvestMachineRate();
-    if(produced > 0){
-      state.automation.harvest.boxWood = Math.min(STORAGE_CAP, state.automation.harvest.boxWood + produced);
-      changed = true;
+
+  const m = state.automation.harvest;
+  if(m.level > 0){
+    ensureMachineTarget();
+    // 長時間放置していた場合(オフライン等)は、歩いている途中でも到着済みとみなす(雇用NPCと同じ救済策)
+    if(m.treeIdx != null && !m.arrived && elapsedSec > 1){
+      const t = trees[m.treeIdx];
+      m.pos = { x: t.x, z: t.z };
+      m.arrived = true;
+    }
+    if(m.treeIdx != null && m.arrived){
+      const t = trees[m.treeIdx];
+      const need = automationHarvestSecondsFor(m.level);
+      m.progress = (m.progress||0) + elapsedSec;
+      if(m.progress >= need){
+        const gained = woodPerTree(); // 実際の木を伐るので、通常の伐採と同じ収穫量(効率化の確保量強化も反映)
+        t.state = "stump"; t.progress = 0; t.stumpUntil = Date.now() + REGROW_SECONDS*1000;
+        setTreeVisual(t);
+        m.boxWood = Math.min(STORAGE_CAP, m.boxWood + gained);
+        m.treeIdx = null; m.progress = 0; m.arrived = false; // 次のフレームで別の木へ再割り当てされる
+        changed = true;
+      }
     }
   }
+
   if(state.automation.trade.level > 0 && npcQueue.length > 0 && state.resources.wood > 1e-9){
     const amount = elapsedSec * tradeMachineRate();
     const used = amount > 0 ? processTradeUnits(amount, "box") : 0;
@@ -1353,6 +1488,8 @@ function animate(ts){
   updateDoorSwing(dt);
   updateHarvestWorkersWalk(dt);
   updateHarvestWorkerVisuals();
+  updateAutomationHarvestWalk(dt);
+  updateExitingNpcs(dt);
   processHiredWorkers(Date.now());
   processAutomation(Date.now());
   updateInteractions(dt); // harvestingTreeIdx(手動伐採中の木)をこのフレーム分で確定させてから、葉エフェクトの表示判定に使う
@@ -1477,13 +1614,21 @@ function renderEffList(){
       const a = state.automation[def.kind];
       const atCap = a.level >= AUTOMATION_MAX;
       const cost = atCap ? null : automationCost(def.kind);
-      const rateFor = def.kind==="harvest" ? harvestMachineRateFor : tradeMachineRateFor;
       const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
       const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
       const boxName = def.kind==="harvest" ? "木材収集ボックス" : "G収集ボックス";
-      const descLine = a.level===0
-        ? `${def.place}。生産物は拠点の${boxName}に格納される`
-        : `現在 ${rateFor(a.level).toFixed(1)}/秒${atCap?"":` → 次Lv ${rateFor(a.level+1).toFixed(1)}/秒`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+      let descLine;
+      if(a.level===0){
+        descLine = `${def.place}。生産物は拠点の${boxName}に格納される`;
+      } else if(def.kind==="harvest"){
+        const cur = automationHarvestSecondsFor(a.level).toFixed(1);
+        const next = atCap ? null : automationHarvestSecondsFor(a.level+1).toFixed(1);
+        descLine = `木1本を${cur}秒で伐採${atCap?"":` → 次Lv ${next}秒`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+      } else {
+        const cur = tradeMachineRateFor(a.level).toFixed(1);
+        const next = atCap ? null : tradeMachineRateFor(a.level+1).toFixed(1);
+        descLine = `現在 ${cur}/秒${atCap?"":` → 次Lv ${next}/秒`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+      }
       const btnLabel = a.level===0 ? "導入" : `Lv.${a.level+1}へ`;
       html += `<div class="eff-row${sel}">
         <div class="eff-info">
@@ -1691,6 +1836,8 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     stepping = false;
     if(world) npcQueue.forEach(npc=> world.group.remove(npc.mesh));
     npcQueue = [];
+    if(world) exitingNpcs.forEach(npc=> world.group.remove(npc.mesh));
+    exitingNpcs = [];
     ensureQueueFilled();
     doorSwing = 0;
     if(world) setDoorSwing(world.door, 0);
