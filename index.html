@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.14.0">
+<meta name="app-version" content="0.15.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -487,9 +487,14 @@ const MARKET_RATES = {
 // v0.9.0: 拠点ゾーンを7x7に拡大。木材売買カウンターは西側に設置(初期のレイアウトに近い形)。
 // 木材伐採エリア(森)は扉の先に直結する連続マップ。
 const TILE = 1;                         // 1マスのサイズ
-const BASE_MIN = -8, BASE_MAX = 3;      // 拠点ゾーン(横7マス・縦12マス。北へ5マス拡張し、拡張ぶんは売買カウンターのレーン用地に)
+// 拠点ゾーンはx(東西)とz(南北)で別の範囲を持つ長方形(以前はBASE_MIN/BASE_MAXの1組をxにもzにも
+// 使い回していたため、北へ拡張した際に拠点が意図せず正方形になり、床(buildGround)の中心もずれる
+// 不具合が起きていた。東西幅7マスはそのまま、南北だけ拡張できるよう軸ごとに分離する)
+const BASE_MIN_X = -3, BASE_MAX_X = 3;  // 拠点ゾーンの東西範囲(7マス、変更なし)
+const BASE_MIN_Z = -10, BASE_MAX_Z = 3; // 拠点ゾーンの南北範囲(14マス。売買レーン6本を2マス間隔で
+                                         // 並べるのに必要な奥行きまで北へ拡張)
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
-const DOOR_Z = BASE_MAX + 1;            // 門の位置(拠点のすぐ南)
+const DOOR_Z = BASE_MAX_Z + 1;          // 門の位置(拠点のすぐ南)
 const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
 const FOREST_MAX_Z = FOREST_MIN_Z + 6;  // 森ゾーンの南端
 const STEP_DURATION = 0.14;             // 1マス移動にかける時間(秒)
@@ -541,36 +546,37 @@ function automationCost(kind){ // レベルアップのコストは大幅に高�
 }
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
-const WOOD_COUNTER_X   = BASE_MIN - 1;   // 木材売買カウンターのx(西の柵の位置)
+const WOOD_COUNTER_X   = BASE_MIN_X - 1;   // 木材売買カウンターのx(西の柵の位置)
 // カウンターは西の壁の全長(上下1マスを除く)に拡張。北端の1マスを木材の置き場、
-// その南に売買レーンを並べる(レーン0=プレイヤー用、レーン1〜5=売買自動化のレベル分だけ開放)
-const COUNTER_Z_FROM   = BASE_MIN + 1;   // カウンター北端(この1マス北=BASE_MINの行は壁のまま)
-const COUNTER_Z_TO     = BASE_MAX - 1;   // カウンター南端(この1マス南=BASE_MAXの行は壁のまま)
-const DEPOSIT_PT       = { x:BASE_MIN, z:COUNTER_Z_FROM }; // 木材を置くポイント(カウンター最北端)
+// その南に売買レーンを2マス間隔で並べる(レーン0=プレイヤー用、レーン1〜5=売買自動化のレベル分だけ開放)
+const COUNTER_Z_FROM   = BASE_MIN_Z + 1;   // カウンター北端(この1マス北=BASE_MIN_Zの行は壁のまま)
+const COUNTER_Z_TO     = BASE_MAX_Z - 1;   // カウンター南端(この1マス南=BASE_MAX_Zの行は壁のまま)
+const DEPOSIT_PT       = { x:BASE_MIN_X, z:COUNTER_Z_FROM }; // 木材を置くポイント(カウンター最北端)
 const TRADE_LANE_MAX   = AUTOMATION_MAX + 1; // 売買レーンの総数(プレイヤー用1+自動化最大5)
-function tradeLaneZ(i){ return COUNTER_Z_FROM + 1 + i; }          // レーンiの取引ポイントz(置き場のすぐ南から順に並ぶ)
-function tradeLaneTradePt(i){ return { x: BASE_MIN, z: tradeLaneZ(i) }; }
-function tradeLaneNpcPos(i){ return { x: BASE_MIN+1, z: tradeLaneZ(i) }; } // 自動化NPCの立ち位置(カウンター内側)
+const TRADE_LANE_GAP   = 2; // レーン間の間隔(マス)。客NPCの退場時の横移動先(+1マス)がレーン間の空きに収まる
+function tradeLaneZ(i){ return COUNTER_Z_FROM + 1 + i*TRADE_LANE_GAP; } // レーンiの取引ポイントz(置き場のすぐ南から順に並ぶ)
+function tradeLaneTradePt(i){ return { x: BASE_MIN_X, z: tradeLaneZ(i) }; }
+function tradeLaneNpcPos(i){ return { x: BASE_MIN_X+1, z: tradeLaneZ(i) }; } // 自動化NPCの立ち位置(カウンター内側)
 const TRADE_PT         = tradeLaneTradePt(0); // レーン0=プレイヤー用の売買するポイント(既存名を維持)
-const NPC_COUNTER_PT   = { x:BASE_MAX-1, z:-2 }; // NPCエリア(伐採NPC・売買NPCを統一して雇用、床のみ・通行可)
-const EFF_COUNTER_PT   = { x:BASE_MAX-1, z: 2 }; // 効率化エリア(床のみ・通行可)
+const NPC_COUNTER_PT   = { x:BASE_MAX_X-1, z:-2 }; // NPCエリア(伐採NPC・売買NPCを統一して雇用、床のみ・通行可)
+const EFF_COUNTER_PT   = { x:BASE_MAX_X-1, z: 2 }; // 効率化エリア(床のみ・通行可)
 const PLAYER_SPAWN     = { x:0, z:1 };  // プレイヤーの初期位置
 
 // 客NPCの待機エリア(拠点の外、西側。土の広場)。縦方向は拠点と同じ幅まで拡張し、
 // 拡張ぶんが各売買レーンの客NPCの列(横方向)を収める土地になる
 const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
 const PLAZA_MIN_X = PLAZA_MAX_X - 6;
-const PLAZA_MIN_Z = BASE_MIN, PLAZA_MAX_Z = BASE_MAX;
+const PLAZA_MIN_Z = BASE_MIN_Z, PLAZA_MAX_Z = BASE_MAX_Z;
 
 // 木材伐採エリア(森)の横幅: 客待機エリアの西端まで拡張(縦方向=z方向は拠点と同じ幅のまま)
 const FOREST_MIN_X = PLAZA_MIN_X;   // 西端は客待機エリアの西端に揃える
-const FOREST_MAX_X = BASE_MAX;      // 東端は拠点と同じ(変更なし)
+const FOREST_MAX_X = BASE_MAX_X;    // 東端は拠点と同じ(変更なし)
 
 // 全自動化の設置位置。マシン/NPC本体は稼働場所(森・売買カウンター)に置くが、
 // 収集ボックスはどちらも拠点内にまとめて設置し、プレイヤーが拠点から出ずに回収できるようにする
 const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシンの初期位置(森。導入後は担当の木まで歩いて移動する)
-const AUTO_BOX_WOOD_PT  = { x:0, z:BASE_MAX };        // 木材収集ボックス(拠点、伐採エリアの扉のすぐ手前)
-const AUTO_BOX_GOLD_PT  = { x:BASE_MAX-2, z:2 };      // G収集ボックス(拠点、効率化ポイントのすぐ隣)
+const AUTO_BOX_WOOD_PT  = { x:0, z:BASE_MAX_Z };      // 木材収集ボックス(拠点、伐採エリアの扉のすぐ手前)
+const AUTO_BOX_GOLD_PT  = { x:BASE_MAX_X-2, z:2 };    // G収集ボックス(拠点、効率化ポイントのすぐ隣)
 // 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
 // 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)
@@ -603,7 +609,7 @@ function inDoorGap(x){ return x >= DOOR_FROM && x <= DOOR_TO; }
 // 拠点ゾーン・扉・森ゾーンを1つの連続したマップとして判定する。
 // NPCエリア・効率化エリアは床のみ(通行可)、木もすり抜けられるので、境界の判定だけでよい
 function blocked(x,z){
-  if(z >= BASE_MIN && z <= BASE_MAX) return x < BASE_MIN || x > BASE_MAX; // 拠点ゾーン(西端=木材売買カウンター)
+  if(z >= BASE_MIN_Z && z <= BASE_MAX_Z) return x < BASE_MIN_X || x > BASE_MAX_X; // 拠点ゾーン(西端=木材売買カウンター)
   if(z === DOOR_Z) return !inDoorGap(x); // 門(扉の幅だけ通れる)
   if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z) return x < FOREST_MIN_X || x > FOREST_MAX_X; // 森ゾーン(客待機エリアまで拡張した横幅)
   return true; // 範囲外
@@ -622,12 +628,15 @@ function addPad(group, x,z,color){
   group.add(mesh);
 }
 function buildGround(group){
-  const baseWidth = (BASE_MAX - BASE_MIN + 1) + 1;      // 壁-壁の幅(拠点)
+  const baseWidth = (BASE_MAX_X - BASE_MIN_X + 1) + 1;      // 壁-壁の幅(拠点)
   const forestWidth = (FOREST_MAX_X - FOREST_MIN_X + 1) + 1; // 壁-壁の幅(森。客待機エリアまで拡張)
   const forestCx = (FOREST_MIN_X + FOREST_MAX_X) / 2;
-  const baseZLen = (BASE_MAX - BASE_MIN + 1) + 1;
+  const baseZLen = (BASE_MAX_Z - BASE_MIN_Z + 1) + 1;
+  // 拠点は東西幅と南北深さが異なる(非対称)ため、中心を(0,0)固定にせずBASE_MIN_X/Z・BASE_MAX_X/Zから
+  // 都度計算する(固定値0のままだと北へ拡張したぶん床と柵の位置がずれる不具合の原因になっていた)
+  const baseCx = (BASE_MIN_X + BASE_MAX_X) / 2, baseCz = (BASE_MIN_Z + BASE_MAX_Z) / 2;
   const forestZLen = (FOREST_MAX_Z+1) - DOOR_Z;
-  addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), 0,-0.1,0, baseWidth, 0.2, baseZLen); // 拠点ゾーンの地面(草)
+  addBox(group, new THREE.MeshStandardMaterial({color:0x6b9c48}), baseCx,-0.1,baseCz, baseWidth, 0.2, baseZLen); // 拠点ゾーンの地面(草)
   addBox(group, new THREE.MeshStandardMaterial({color:0x3f5e2f}), forestCx,-0.1,(DOOR_Z+FOREST_MAX_Z+1)/2, forestWidth, 0.2, forestZLen); // 森ゾーンの地面
   const plazaCx = (PLAZA_MIN_X+PLAZA_MAX_X)/2, plazaCz = (PLAZA_MIN_Z+PLAZA_MAX_Z)/2;
   const plazaDepth = (PLAZA_MAX_Z - PLAZA_MIN_Z + 1) + 1; // 縦方向は拠点と同じ幅まで拡張済み
@@ -638,19 +647,19 @@ function buildGround(group){
 function buildFence(group){
   const mat = new THREE.MeshStandardMaterial({ color:0x8a6b3f });
   const postMat = new THREE.MeshStandardMaterial({ color:0x5a4128 });
-  const baseWidth = (BASE_MAX - BASE_MIN + 1);
+  const baseWidth = (BASE_MAX_X - BASE_MIN_X + 1);
   const forestWidth = (FOREST_MAX_X - FOREST_MIN_X + 1);
-  addBox(group, mat, 0, 0.8, BASE_MIN-1, baseWidth, 1.6, 0.4);              // 北(拠点)
+  addBox(group, mat, 0, 0.8, BASE_MIN_Z-1, baseWidth, 1.6, 0.4);              // 北(拠点)
   // 東: 拠点部分(拠点幅、扉の行まで)+ 森部分(森幅、扉の行から南)
-  const baseEastZLen = DOOR_Z - (BASE_MIN-1);
-  addBox(group, mat, BASE_MAX+1, 0.8, ((BASE_MIN-1)+DOOR_Z)/2, 0.4, 1.6, baseEastZLen);
+  const baseEastZLen = DOOR_Z - (BASE_MIN_Z-1);
+  addBox(group, mat, BASE_MAX_X+1, 0.8, ((BASE_MIN_Z-1)+DOOR_Z)/2, 0.4, 1.6, baseEastZLen);
   const forestSideZLen = (FOREST_MAX_Z+1) - DOOR_Z;
   addBox(group, mat, FOREST_MAX_X+1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
   // 西: 上下1マスずつだけ壁を残し、それ以外の全長(COUNTER_Z_FROM〜COUNTER_Z_TO)はカウンター本体で塞ぐ
   // + 森部分(森幅、扉の行から南)
-  addBox(group, mat, BASE_MIN-1, 0.8, BASE_MIN, 0.4, 1.6, 1);           // 上端の壁(1マス)
-  const westSouthLen = DOOR_Z - (BASE_MAX-0.5);
-  addBox(group, mat, BASE_MIN-1, 0.8, (BASE_MAX-0.5+DOOR_Z)/2, 0.4, 1.6, westSouthLen); // 下端の壁(1マス)+扉の行までの接続
+  addBox(group, mat, BASE_MIN_X-1, 0.8, BASE_MIN_Z, 0.4, 1.6, 1);           // 上端の壁(1マス)
+  const westSouthLen = DOOR_Z - (BASE_MAX_Z-0.5);
+  addBox(group, mat, BASE_MIN_X-1, 0.8, (BASE_MAX_Z-0.5+DOOR_Z)/2, 0.4, 1.6, westSouthLen); // 下端の壁(1マス)+扉の行までの接続
   addBox(group, mat, FOREST_MIN_X-1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
   // 門の行(森幅いっぱいに、扉の隙間だけ開ける)
   const doorLeftW = DOOR_FROM - (FOREST_MIN_X-1), doorRightW = (FOREST_MAX_X+1) - DOOR_TO;
@@ -911,7 +920,7 @@ function repositionNpcQueue(laneIdx){
 // 現在アクティブな売買レーン数(0=プレイヤー用は常時、1以降は売買自動化のレベル分だけ開放)
 function activeLaneCount(){ return 1 + state.automation.trade.level; }
 // 取引完了後の客NPCの退場アニメーション(毎フレーム呼び出す)。
-// まず右(奥)へ2マス横移動(sidestep)してから、列の後方側(西、PLAZA_MIN_X方向)へ1マスずつ歩き(walk)、
+// まず右(奥)へ1マス横移動(sidestep)してから、列の後方側(西、PLAZA_MIN_X方向)へ1マスずつ歩き(walk)、
 // 待機エリア外(PLAZA_MIN_Xより西)に出たタイミングで消滅させる
 function updateExitingNpcs(dt){
   for(let i = exitingNpcs.length-1; i >= 0; i--){
@@ -937,11 +946,12 @@ function updateExitingNpcs(dt){
 function completeFrontNpcPurchase(laneIdx, target){
   const npc = npcQueues[laneIdx].shift();
   if(npc){
-    // 取引完了後もすぐには消さず、退場アニメーションへ切り替える(右へ2マス→列の後方側へ1マスずつ、
-    // 待機エリア外に出たら消滅)。先頭にいた座標からスタート
+    // 取引完了後もすぐには消さず、退場アニメーションへ切り替える(右へ1マス→列の後方側へ1マスずつ、
+    // 待機エリア外に出たら消滅)。先頭にいた座標からスタート。レーン間隔(TRADE_LANE_GAP=2マス)の
+    // ちょうど中間に入るので、隣のレーンの列と重ならずに退場できる
     const frontPos = npcSlotPos(laneIdx, 0);
     npc.pos = { x: frontPos.x, z: frontPos.z };
-    npc.exitTargetZ = frontPos.z + 2;
+    npc.exitTargetZ = frontPos.z + 1;
     npc.exitPhase = "sidestep";
     npc.stepTimer = 0;
     exitingNpcs.push(npc);
@@ -1152,7 +1162,7 @@ function initScene(){
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0c1a10);
-  const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 100);
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 150); // FOVを広げ、見える範囲を拡大
   scene.add(new THREE.AmbientLight(0xffffff, 0.65));
   const sun = new THREE.DirectionalLight(0xffffff, 0.7);
   sun.position.set(6,10,4);
@@ -1192,7 +1202,8 @@ function resizeScene(){
 function updatePlayerMesh(){
   if(!world) return;
   world.playerMesh.position.set(state.player.x, 0, state.player.z);
-  world.camera.position.set(state.player.x, 7.0, state.player.z + 6.0);
+  // カメラを後方・上方に引いて見える範囲を広げ、真上に近かった見下ろし角度を斜めからの見た目に緩和
+  world.camera.position.set(state.player.x, 9.0, state.player.z + 13.0);
   world.camera.lookAt(state.player.x, 0, state.player.z);
 }
 
@@ -1519,7 +1530,7 @@ function showAction(text){
 function hideAction(){ document.getElementById("hudAction").classList.remove("show"); }
 function currentZoneLabel(){
   const z = state.player.z;
-  if(z <= BASE_MAX) return "🏕️ 拠点";
+  if(z <= BASE_MAX_Z) return "🏕️ 拠点";
   if(z === DOOR_Z) return "🚪 扉";
   return "🌲 森";
 }
