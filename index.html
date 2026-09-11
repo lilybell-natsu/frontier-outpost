@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.10.0">
+<meta name="app-version" content="0.11.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -386,7 +386,8 @@ function defaultState(){
     upgrades: { amount:0, speed:0, price:0 },
     // 伐採自動化(森にマシンを設置)・売買自動化(カウンターにNPCを常駐)。
     // 通常の雇用NPC(単発・消耗式)とは別枠の、Gで導入する常設の全自動生産ライン。
-    // 生産物は自動化収集ボックス(boxWood/boxGold)に貯まり、プレイヤーが現地で回収する
+    // 生産物は自動化収集ボックス(木材収集ボックス=boxWood/G収集ボックス=boxGold)に貯まり、
+    // どちらも拠点内に設置されるので、プレイヤーは拠点から出ずに回収できる
     automation: {
       harvest: { level:0, boxWood:0 },
       trade:   { level:0, boxGold:0 }
@@ -503,7 +504,7 @@ function harvestSeconds(){ return Math.max(1, HARVEST_SECONDS_BASE - state.upgra
 function tradeRewardGold(){ return TRADE_REWARD_GOLD_BASE + state.upgrades.price; }
 
 // --- 全自動化(伐採マシン・常駐売買NPC)。導入にGを消費する常設ラインで、
-//     単発雇用NPC(HIRE_COST/HIRE_YIELD)とは別枠。生産物は収集ボックスに貯まり、現地で回収する ---
+//     単発雇用NPC(HIRE_COST/HIRE_YIELD)とは別枠。生産物は拠点内の収集ボックス(木材用/G用)に貯まる ---
 const AUTOMATION_UNLOCK_COST = 500;     // 初回導入(Lv.0→1)に必要なゴールド
 const AUTOMATION_MAX = 5;               // 自動化の最大レベル
 const AUTOMATION_HARVEST_RATE_BASE = 1;       // 伐採マシンLv.1の生産速度(個/秒)
@@ -534,9 +535,11 @@ const PLAZA_MAX_X = WOOD_COUNTER_X - 1;
 const PLAZA_MIN_X = PLAZA_MAX_X - 6;
 const PLAZA_MIN_Z = -3, PLAZA_MAX_Z = 3;
 
-// 全自動化の設置位置・収集ボックス位置
-const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシン+収集ボックス(森の空きマス、木の並びの南)
-const AUTO_TRADE_BOX_PT = { x:BASE_MIN, z:0 };        // 売買自動化の収集ボックス(拠点、置き場と売買ポイントの間)
+// 全自動化の設置位置。マシン/NPC本体は稼働場所(森・売買カウンター)に置くが、
+// 収集ボックスはどちらも拠点内にまとめて設置し、プレイヤーが拠点から出ずに回収できるようにする
+const AUTO_HARVEST_PT   = { x:0, z:FOREST_MAX_Z };   // 伐採マシン(森の空きマス、木の並びの南。生産のみ、ボックスはここには置かない)
+const AUTO_BOX_WOOD_PT  = { x:BASE_MIN+1, z:0 };      // 木材収集ボックス(拠点、常駐売買NPCのすぐ隣)
+const AUTO_BOX_GOLD_PT  = { x:BASE_MIN, z:0 };        // G収集ボックス(拠点、置き場と売買ポイントの間)
 const AUTO_TRADE_NPC_PT = { x:BASE_MIN+1, z:1 };      // 常駐売買NPCの立ち位置(売買ポイントのすぐ隣)
 
 // 森ゾーン: 木を9本、等間隔(3×3)に配置
@@ -920,13 +923,18 @@ function syncWorkerMeshes(){
   });
 }
 // --- 全自動化(伐採マシン・常駐売買NPC)の見た目 ---------------------------
-// 収集ボックス(木箱)の共通メッシュ
-function buildCollectionBoxMesh(){
-  const box = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.4,0.5), new THREE.MeshStandardMaterial({color:0x8a6b3f}));
-  box.position.y = 0.2;
-  return box;
+// 収集ボックス(木箱)の共通メッシュ。accentColorで蓋の色を変え、木材用/G用を見分けられるようにする
+function buildCollectionBoxMesh(accentColor){
+  const g = new THREE.Group();
+  const crate = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.4,0.5), new THREE.MeshStandardMaterial({color:0x8a6b3f}));
+  crate.position.y = 0.2;
+  g.add(crate);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(0.54,0.08,0.54), new THREE.MeshStandardMaterial({color:accentColor}));
+  lid.position.y = 0.42;
+  g.add(lid);
+  return g;
 }
-// 伐採マシン(森に設置。回転する集材ファンネルを持つ簡易な機械)
+// 伐採マシン(森に設置。回転する集材ファンネルを持つ簡易な機械。収集ボックスはここには置かず拠点側に集約する)
 function buildAutomationHarvestMesh(){
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.7,0.6,0.7), new THREE.MeshStandardMaterial({color:0x6b6f78}));
@@ -934,9 +942,6 @@ function buildAutomationHarvestMesh(){
   const funnel = new THREE.Mesh(new THREE.ConeGeometry(0.3,0.4,4), new THREE.MeshStandardMaterial({color:0xe0a83f}));
   funnel.position.y = 0.75; funnel.name = "funnel";
   g.add(body, funnel);
-  const box = buildCollectionBoxMesh();
-  box.position.x = 0.75;
-  g.add(box);
   g.position.set(AUTO_HARVEST_PT.x, 0, AUTO_HARVEST_PT.z);
   return g;
 }
@@ -946,9 +951,16 @@ function buildAutomationTradeNpcMesh(){
   g.position.set(AUTO_TRADE_NPC_PT.x, 0, AUTO_TRADE_NPC_PT.z);
   return g;
 }
-function buildAutomationTradeBoxMesh(){
-  const box = buildCollectionBoxMesh();
-  box.position.set(AUTO_TRADE_BOX_PT.x, 0.2, AUTO_TRADE_BOX_PT.z);
+// 木材収集ボックス(拠点)。蓋を木材色にして一目でわかるようにする
+function buildAutomationWoodBoxMesh(){
+  const box = buildCollectionBoxMesh(0xc98a4b);
+  box.position.set(AUTO_BOX_WOOD_PT.x, 0, AUTO_BOX_WOOD_PT.z);
+  return box;
+}
+// G収集ボックス(拠点)。蓋をゴールド色にして一目でわかるようにする
+function buildAutomationGoldBoxMesh(){
+  const box = buildCollectionBoxMesh(0xf0c245);
+  box.position.set(AUTO_BOX_GOLD_PT.x, 0, AUTO_BOX_GOLD_PT.z);
   return box;
 }
 // 自動化の導入状況(state.automation)に合わせて、機械・常駐NPC・収集ボックスの表示を同期する
@@ -957,18 +969,19 @@ function syncAutomationMeshes(){
   const hLv = state.automation.harvest.level, tLv = state.automation.trade.level;
   if(hLv > 0 && !world.autoHarvestMesh){
     world.autoHarvestMesh = buildAutomationHarvestMesh();
-    world.group.add(world.autoHarvestMesh);
+    world.autoWoodBoxMesh = buildAutomationWoodBoxMesh();
+    world.group.add(world.autoHarvestMesh, world.autoWoodBoxMesh);
   } else if(hLv <= 0 && world.autoHarvestMesh){
-    world.group.remove(world.autoHarvestMesh);
-    world.autoHarvestMesh = null;
+    world.group.remove(world.autoHarvestMesh, world.autoWoodBoxMesh);
+    world.autoHarvestMesh = null; world.autoWoodBoxMesh = null;
   }
   if(tLv > 0 && !world.autoTradeNpcMesh){
     world.autoTradeNpcMesh = buildAutomationTradeNpcMesh();
-    world.autoTradeBoxMesh = buildAutomationTradeBoxMesh();
-    world.group.add(world.autoTradeNpcMesh, world.autoTradeBoxMesh);
+    world.autoGoldBoxMesh = buildAutomationGoldBoxMesh();
+    world.group.add(world.autoTradeNpcMesh, world.autoGoldBoxMesh);
   } else if(tLv <= 0 && world.autoTradeNpcMesh){
-    world.group.remove(world.autoTradeNpcMesh, world.autoTradeBoxMesh);
-    world.autoTradeNpcMesh = null; world.autoTradeBoxMesh = null;
+    world.group.remove(world.autoTradeNpcMesh, world.autoGoldBoxMesh);
+    world.autoTradeNpcMesh = null; world.autoGoldBoxMesh = null;
   }
 }
 // 伐採マシンのファンネルをゆっくり回転させ、稼働中であることを表現する(毎フレーム呼び出す)
@@ -1161,26 +1174,26 @@ function updateInteractions(dt){
     actionShown = true;
   }
 
-  // 伐採自動化: 収集ボックスに近づくと、貯まっている木材をカウンターの在庫へ自動回収する
+  // 伐採自動化: 木材収集ボックス(拠点)に近づくと、貯まっている木材をカウンターの在庫へ自動回収する
   if(state.automation.harvest.level > 0 && state.automation.harvest.boxWood > 1e-9 &&
-     distTo(AUTO_HARVEST_PT.x,AUTO_HARVEST_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+     distTo(AUTO_BOX_WOOD_PT.x,AUTO_BOX_WOOD_PT.z,p.x,p.z) <= INTERACT_RADIUS){
     const room = Math.max(0, storageCap() - state.resources.wood);
     const take = Math.min(state.automation.harvest.boxWood, room);
     if(take > 1e-9){
       state.resources.wood += take;
       state.automation.harvest.boxWood -= take;
       renderResBar(); updateWoodPile(); save();
-      toast(`📦 収集ボックスから木材${Math.floor(take)}を回収!`);
+      toast(`📦 木材収集ボックスから木材${Math.floor(take)}を回収!`);
     }
   }
-  // 売買自動化: 収集ボックスに近づくと、貯まっているゴールドを自動回収する
+  // 売買自動化: G収集ボックス(拠点)に近づくと、貯まっているゴールドを自動回収する
   if(state.automation.trade.level > 0 && state.automation.trade.boxGold > 1e-9 &&
-     distTo(AUTO_TRADE_BOX_PT.x,AUTO_TRADE_BOX_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+     distTo(AUTO_BOX_GOLD_PT.x,AUTO_BOX_GOLD_PT.z,p.x,p.z) <= INTERACT_RADIUS){
     const take = state.automation.trade.boxGold;
     state.resources.gold += take;
     state.automation.trade.boxGold = 0;
     renderResBar(); save();
-    toast(`📦 収集ボックスからゴールド${Math.floor(take)}を回収!`);
+    toast(`📦 G収集ボックスからゴールド${Math.floor(take)}を回収!`);
   }
 
   if(!actionShown) hideAction();
@@ -1467,9 +1480,10 @@ function renderEffList(){
       const rateFor = def.kind==="harvest" ? harvestMachineRateFor : tradeMachineRateFor;
       const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
       const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
+      const boxName = def.kind==="harvest" ? "木材収集ボックス" : "G収集ボックス";
       const descLine = a.level===0
-        ? `${def.place}(自動で稼働し、収集ボックスに格納)`
-        : `現在 ${rateFor(a.level).toFixed(1)}/秒${atCap?"":` → 次Lv ${rateFor(a.level+1).toFixed(1)}/秒`} ・ ボックス内 ${boxIcon}${Math.floor(box)}(現地で回収)`;
+        ? `${def.place}。生産物は拠点の${boxName}に格納される`
+        : `現在 ${rateFor(a.level).toFixed(1)}/秒${atCap?"":` → 次Lv ${rateFor(a.level+1).toFixed(1)}/秒`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
       const btnLabel = a.level===0 ? "導入" : `Lv.${a.level+1}へ`;
       html += `<div class="eff-row${sel}">
         <div class="eff-info">
