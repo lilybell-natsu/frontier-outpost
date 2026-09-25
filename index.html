@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.25.0">
+<meta name="app-version" content="0.26.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -343,7 +343,7 @@ function defaultState(){
     automation: {
       harvest:   { countLevel:0, speedLevel:0, boxWood:0, machines:[] },
       trade:     { countLevel:0, speedLevel:0, boxGold:0 },
-      transport: { level:0 } // 木材自動運搬(ベルトコンベア)。導入すると木材収集ボックス→カウンターへ自動で木材が運ばれる
+      transport: { countLevel:0, speedLevel:0 } // 木材自動運搬(ベルトコンベア)。本数(countLevel)/効率(speedLevel)の2トラック
     },
     automationLastTick: Date.now(),
     transportLastTick: Date.now(),
@@ -398,7 +398,16 @@ function load(){
       parsed.automation.trade.speedLevel = 0;
     }
     delete parsed.automation.trade.level;
-    if(!parsed.automation.transport) parsed.automation.transport = { level:0 };
+    if(!parsed.automation.transport) parsed.automation.transport = { countLevel:0, speedLevel:0 };
+    // v0.25.0以前(本数・効率が未分離の単一levelだった)からの互換: 旧levelは「導入していれば1本、
+    // 未導入なら0本」としてcountLevelへ、旧levelの値そのものはこれまでの投資を無駄にしないよう
+    // speedLevelへ引き継ぐ(旧仕様は単一トラックで運搬速度を上げていたため)
+    if(parsed.automation.transport.countLevel === undefined){
+      const oldLv = parsed.automation.transport.level || 0;
+      parsed.automation.transport.countLevel = oldLv > 0 ? 1 : 0;
+      parsed.automation.transport.speedLevel = oldLv;
+    }
+    delete parsed.automation.transport.level;
     if(!parsed.automationLastTick) parsed.automationLastTick = Date.now();
     if(!parsed.transportLastTick) parsed.transportLastTick = Date.now();
     if(!parsed.baseExpansion) parsed.baseExpansion = { level:0 };
@@ -478,13 +487,13 @@ let BASE_MIN_Z = BASE_MIN_Z_INITIAL;
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
 const DOOR_Z = BASE_MAX_Z + 1;          // 門の位置(拠点のすぐ南)
 const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
-const FOREST_MAX_Z = FOREST_MIN_Z + 9;  // 森ゾーンの南端(v0.25.0で7→10マスに拡張。伐採可能な木も1列追加)
+const FOREST_MAX_Z = FOREST_MIN_Z + 15; // 森ゾーンの南端(v0.25.0で7→10マス、v0.26.0で10→16マスに拡張。伐採可能な木も都度追加)
 const STEP_DURATION = 0.14;             // 1マス移動にかける時間(秒)
 const WORKER_STEP_DURATION = 0.18;      // 雇用NPCが1マス移動するのにかける時間(秒)
 const INTERACT_RADIUS = 1.1;            // 隣接マス(距離1)から操作できるように
 const HARVEST_RADIUS = 1.1;
 const HARVEST_SECONDS_BASE = 3;         // 木に近づいてから木材化するまでの時間(効率化で短縮)
-const REGROW_SECONDS = 10;              // 伐採後に木が元に戻るまでの時間
+const REGROW_SECONDS = 1.5;             // 伐採後に木が元に戻るまでの時間
 const WOOD_PER_TREE_BASE = 3;           // 1回の伐採で得られる木材(効率化で増加)
 const WOOD_TRANSFER_PER_SEC = 6;        // 売買ポイントでNPCへ木材を渡す速さ(1秒あたり。v0.5.0の3から倍増)
 const NPC_BUY_ORDER = 3;                // NPC1人が購入する木材の量
@@ -499,8 +508,8 @@ const WORKER_MAX = 5;                   // 雇用NPCは種別ごとに最大5体
 const HARVEST_NPC_RATE = 1/2.5;         // 伐採NPC1体あたりの生産速度(個/秒。手動よりゆっくり)
 const SELL_NPC_RATE = WOOD_TRANSFER_PER_SEC; // 売買NPC1体あたりの受け渡し速度(個/秒)
 
-const LEVEL_MAX = 10;                   // 効率化タブの全アップグレードで統一する最大レベル
-const UPGRADE_MAX = LEVEL_MAX;          // 効率化(確保量/速度/単価)の最大レベル
+const LEVEL_MAX = 10;                   // 自動化・拠点拡張の各トラックで統一する最大レベル
+const UPGRADE_MAX = 50;                 // 効率化の基本強化(確保量/速度/単価)の最大レベル(自動化等とは別枠でより高く)
 const UPGRADE_DEFS = {
   amount: { name:"木材の確保量", icon:"🪓", desc:(lv)=>`1回の伐採で +${lv} 個` },
   speed:  { name:"伐採速度",     icon:"⚡", desc:(lv)=>`伐採時間 -${(lv*0.4).toFixed(1)}秒` },
@@ -556,21 +565,24 @@ function baseExpansionCost(){
 
 // 木材自動運搬(ベルトコンベア): 木材収集ボックス(AUTO_BOX_WOOD_PT)に貯まった木材を、
 // プレイヤーが回収しに行かなくても、自動でカウンターの在庫(state.resources.wood)へ運ぶ。
-// 台数/効率のような2トラックではなく単一のlevel(Lv.0=未導入、Lv.1で導入すると同時に
-// ベルトコンベアが出現し、以降のレベルアップは運搬効率(個/秒)の強化のみを行う)
+// 伐採自動化・売買自動化と同じく「本数(countLevel)」「効率(speedLevel)」の2トラックに分離
+// (v0.26.0。旧: 単一のlevelで導入と効率強化を兼ねていた)。本数はコンベアの並行稼働数、
+// 効率は1本あたりの運搬速度で、合計の運搬量は countLevel × 1本あたりの速度 になる
 const TRANSPORT_MAX = LEVEL_MAX;
-const TRANSPORT_UNLOCK_COST = 600;      // Lv.0→1(導入)に必要なゴールド
-function transportCost(){
-  const lv = state.automation.transport.level;
+const TRANSPORT_COUNT_UNLOCK_COST = 600;  // 本数トラック Lv.0→1(初回導入)に必要なゴールド
+const TRANSPORT_SPEED_UNLOCK_COST = 450;  // 効率トラック Lv.0→1に必要なゴールド
+function transportCountCost(){
+  const lv = state.automation.transport.countLevel;
   if(lv >= TRANSPORT_MAX) return null;
-  return Math.round(TRANSPORT_UNLOCK_COST * Math.pow(2.1, lv));
+  return Math.round(TRANSPORT_COUNT_UNLOCK_COST * Math.pow(2.2, lv));
 }
-const TRANSPORT_RATE_BASE = 1.5;   // Lv.1での運搬速度(個/秒)
-const TRANSPORT_RATE_STEP = 0.3;   // Lvごとの増加量
-function transportRateFor(lv){
-  if(lv <= 0) return 0;
-  return TRANSPORT_RATE_BASE + (lv-1)*TRANSPORT_RATE_STEP;
+function transportSpeedCost(){
+  const lv = state.automation.transport.speedLevel;
+  if(lv >= TRANSPORT_MAX) return null;
+  return Math.round(TRANSPORT_SPEED_UNLOCK_COST * Math.pow(2.0, lv));
 }
+// 1本あたりの運搬速度(個/秒)。指定どおりLv.N→N個/秒の単純な比例(Lv.0=未導入=0個/秒)
+function transportRateForLevel(lv){ return Math.max(0, lv); }
 
 // 拠点ゾーンの固定オブジェクト(すべて整数マス)。木材売買カウンターは西側の柵に埋め込む(初期レイアウト)
 const WOOD_COUNTER_X   = BASE_MIN_X - 1;   // 木材売買カウンターのx(西の柵の位置。拠点拡張の対象外)
@@ -627,9 +639,9 @@ const AUTO_BOX_GOLD_PT  = { x:BASE_MIN_X+2, z:COUNTER_Z_TO };
 // 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
 // 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)。
-// v0.25.0で森を縦方向に3マス拡張したのにあわせ、木の列を1列追加(3列→4列)
+// v0.25.0で森を縦方向に3マス拡張し木の列を1列追加(3列→4列)、v0.26.0でさらに6マス拡張し2列追加(4列→6列)
 const TREE_DEFS = [];
-for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5, FOREST_MIN_Z+7]){
+for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5, FOREST_MIN_Z+7, FOREST_MIN_Z+9, FOREST_MIN_Z+11]){
   for(let tx = FOREST_MIN_X+1; tx <= FOREST_MAX_X-1; tx += 2){
     TREE_DEFS.push({ x:tx, z:tz });
   }
@@ -1174,6 +1186,7 @@ function syncAutomationMeshes(){
     world.autoGoldBoxMesh = null;
   }
   syncTradeLanes();
+  syncTransportBelt();
 }
 // 売買自動化のレベル(=開放されたレーン数)に合わせて、レーン1以降の常駐NPC・客NPCの列を同期する
 // (レーン0=プレイヤー用は別枠で常時有効なのでここでは扱わない)
@@ -1248,8 +1261,16 @@ function addBeltSegment(group, fromPt, toPt){
   }
   return len;
 }
-function buildTransportBeltMesh(){
-  const boxPt = AUTO_BOX_WOOD_PT, depositPt = DEPOSIT_PT, bendPt = transportBendPoint();
+// 本数(countLevel)ぶん並行稼働するコンベアを、通路の見た目が窮屈にならないよう最大4本までに
+// 間引いて並べて表示する(搬送量の計算自体はcountLevelどおりに行われ、見た目の本数上限とは無関係)。
+// laneOffsetは経路全体を垂直方向(box側はz、deposit側はx)に一律ずらす量で、並行な複数本を
+// 描き分けるためだけに使う演出上の値
+const TRANSPORT_BELT_VISUAL_MAX = 4;
+const TRANSPORT_BELT_LANE_GAP = 0.22;
+function buildTransportBeltMesh(laneOffset){
+  const boxPt = { x: AUTO_BOX_WOOD_PT.x, z: AUTO_BOX_WOOD_PT.z + laneOffset };
+  const depositPt = { x: DEPOSIT_PT.x + laneOffset, z: DEPOSIT_PT.z };
+  const bendPt = { x: depositPt.x, z: boxPt.z };
   const g = new THREE.Group(); // 区間はworld.group基準の絶対座標で配置するので、g自体に位置/回転は持たせない
 
   const lenA = addBeltSegment(g, boxPt, bendPt);
@@ -1273,52 +1294,62 @@ function buildTransportBeltMesh(){
   g.userData.packets = packets;
   return g;
 }
-// state.automation.transport.levelに合わせて、ベルトコンベアの表示を同期する(未導入なら非表示のまま)
+// state.automation.transport.countLevelに合わせて、並行稼働するコンベアの表示本数を同期する
+// (見た目は最大TRANSPORT_BELT_VISUAL_MAX本まで。各レーンの位置は生成時のインデックスで固定され、
+// 後から本数が増減しても既存のレーンが左右にずれて見えることはない)
 function syncTransportBelt(){
   if(!world) return;
-  const active = state.automation.transport.level > 0;
-  if(active && !world.transportBelt){
-    const belt = buildTransportBeltMesh();
+  if(!world.transportBelts) world.transportBelts = [];
+  const visualCount = Math.min(state.automation.transport.countLevel, TRANSPORT_BELT_VISUAL_MAX);
+  while(world.transportBelts.length < visualCount){
+    const i = world.transportBelts.length;
+    const offset = (i - (TRANSPORT_BELT_VISUAL_MAX-1)/2) * TRANSPORT_BELT_LANE_GAP;
+    const belt = buildTransportBeltMesh(offset);
     world.group.add(belt);
-    world.transportBelt = belt;
-  } else if(!active && world.transportBelt){
-    world.group.remove(world.transportBelt);
-    world.transportBelt = null;
+    world.transportBelts.push(belt);
+  }
+  while(world.transportBelts.length > visualCount){
+    world.group.remove(world.transportBelts.pop());
   }
 }
-// 拠点拡張などでDEPOSIT_PT/AUTO_BOX_WOOD_PTの位置関係が変わりうる場合に備え、ベルトが導入済みなら
+// 拠点拡張などでDEPOSIT_PT/AUTO_BOX_WOOD_PTの位置関係が変わりうる場合に備え、コンベアが導入済みなら
 // 座標ごと作り直す(現状はどちらもCOUNTER_Z_TO/BASE_MAX_Zにanchorした定数のため実際には毎回同じ
 // 形になるが、将来レイアウトが変わっても安全なように呼び続ける)
 function rebuildTransportBelt(){
-  if(!world || !world.transportBelt) return;
-  world.group.remove(world.transportBelt);
-  world.transportBelt = null;
+  if(!world || !world.transportBelts || world.transportBelts.length === 0) return;
+  world.transportBelts.forEach(b=> world.group.remove(b));
+  world.transportBelts = [];
   syncTransportBelt();
 }
-// ベルトコンベア上の木材(3個)を、運搬効率(個/秒)に応じた速さで折れ線に沿ってループ移動させる(演出のみ)。
-// 経路全体の長さ(区間A+区間B)を1周期とし、区間Aの範囲内かどうかで単純な線形補間の対象を切り替える
+// 各コンベア上の木材(3個ずつ)を、1本あたりの運搬効率(個/秒)に応じた速さで折れ線に沿って
+// ループ移動させる(演出のみ)。経路全体の長さ(区間A+区間B)を1周期とし、区間Aの範囲内かどうかで
+// 単純な線形補間の対象を切り替える
 function updateTransportBeltVisual(now){
-  if(!world || !world.transportBelt) return;
-  const ud = world.transportBelt.userData;
-  const total = ud.totalLength;
-  const lv = state.automation.transport.level;
-  const speed = 1.0 + Math.max(0, lv-1)*0.12; // マス/秒(見た目用。レベルが上がるほど心持ち速く見せる)
+  if(!world || !world.transportBelts || world.transportBelts.length === 0) return;
+  const lv = state.automation.transport.speedLevel;
+  // マス/秒(見た目用)。効率(speedLevel)が0のうちは実際の運搬量も0のため、見た目もあえて静止させる
+  const speed = transportRateForLevel(lv) * 0.6;
+  if(speed <= 0) return;
   const t = now/1000;
-  ud.packets.forEach((packet, i)=>{
-    const phase = ((t*speed + i*(total/3)) % total + total) % total;
-    let x, z;
-    if(phase <= ud.lenA){
-      const f = ud.lenA > 0 ? phase/ud.lenA : 0;
-      x = ud.boxPt.x + (ud.bendPt.x - ud.boxPt.x)*f;
-      z = ud.boxPt.z + (ud.bendPt.z - ud.boxPt.z)*f;
-    } else {
-      const lenB = total - ud.lenA;
-      const f = lenB > 0 ? (phase - ud.lenA)/lenB : 0;
-      x = ud.bendPt.x + (ud.depositPt.x - ud.bendPt.x)*f;
-      z = ud.bendPt.z + (ud.depositPt.z - ud.bendPt.z)*f;
-    }
-    packet.position.x = x;
-    packet.position.z = z;
+  world.transportBelts.forEach(belt=>{
+    const ud = belt.userData;
+    const total = ud.totalLength;
+    ud.packets.forEach((packet, i)=>{
+      const phase = ((t*speed + i*(total/3)) % total + total) % total;
+      let x, z;
+      if(phase <= ud.lenA){
+        const f = ud.lenA > 0 ? phase/ud.lenA : 0;
+        x = ud.boxPt.x + (ud.bendPt.x - ud.boxPt.x)*f;
+        z = ud.boxPt.z + (ud.bendPt.z - ud.boxPt.z)*f;
+      } else {
+        const lenB = total - ud.lenA;
+        const f = lenB > 0 ? (phase - ud.lenA)/lenB : 0;
+        x = ud.bendPt.x + (ud.depositPt.x - ud.bendPt.x)*f;
+        z = ud.bendPt.z + (ud.depositPt.z - ud.bendPt.z)*f;
+      }
+      packet.position.x = x;
+      packet.position.z = z;
+    });
   });
 }
 
@@ -1654,18 +1685,20 @@ function processHiredWorkers(now){
 }
 
 // --- 全自動化の導入・レベルアップ(効率化タブ) ----------------------------
-// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC)。track: "count"(台数/人数) | "speed"(効率)。
-// countはLv.0→1が導入(500G)、以降はレベルアップ。speedはcountLevelが1以上でないと購入できない
-// (稼働台数が0のうちは効率を上げても意味がないため)
+// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC) | "transport"(木材自動運搬)。
+// track: "count"(台数/人数/本数) | "speed"(効率)。
+// countはLv.0→1が導入、以降はレベルアップ。speedはcountLevelが1以上でないと購入できない
+// (稼働数が0のうちは効率を上げても意味がないため)
 function buyAutomation(kind, track){
   const a = state.automation[kind];
+  const label = kind==="harvest" ? "伐採マシン" : kind==="trade" ? "常駐売買NPC" : "木材自動運搬(本数)";
   if(track === "count"){
     if(a.countLevel >= AUTOMATION_MAX) return;
     if(kind === "trade" && (1 + a.countLevel + 1) > maxTradeLanesFit()){
       toast("拠点拡張が必要(客NPCの列を置く余地がない)");
       return;
     }
-    const cost = automationCountCost(kind);
+    const cost = kind === "transport" ? transportCountCost() : automationCountCost(kind);
     if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
     state.resources.gold -= cost;
     const wasZero = a.countLevel === 0;
@@ -1676,24 +1709,30 @@ function buyAutomation(kind, track){
       assignMachineTree(m, 0);
       a.machines.push(m);
     }
-    syncAutomationMeshes();
+    syncAutomationMeshes(); // 内部でsyncTransportBelt()も呼ぶため、transportのコンベア表示もここで同期される
     renderResBar(); renderEffList(); save();
     if(wasZero){
-      toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : "⚙️ 売買NPCをカウンターに常駐させた!");
+      toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : kind==="trade" ? "⚙️ 売買NPCをカウンターに常駐させた!" : "⚙️ 木材自動運搬用のベルトコンベアを設置した!");
     } else if(kind === "harvest"){
       toast(`⚙️ 伐採マシンを増設した!(計${a.countLevel}台)`);
-    } else {
+    } else if(kind === "trade"){
       toast(`⚙️ 常駐売買NPCを増員した!(計${a.countLevel}体・客NPCの列も増設)`);
+    } else {
+      toast(`⚙️ コンベアを増設した!(計${a.countLevel}本)`);
     }
   } else { // track === "speed"
-    if(a.countLevel <= 0){ toast(`先に${kind==="harvest"?"伐採マシン":"常駐売買NPC"}を導入してください`); return; }
+    if(a.countLevel <= 0){ toast(`先に${label}を導入してください`); return; }
     if(a.speedLevel >= AUTOMATION_MAX) return;
-    const cost = automationEfficiencyCost(kind);
+    const cost = kind === "transport" ? transportSpeedCost() : automationEfficiencyCost(kind);
     if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
     state.resources.gold -= cost;
     a.speedLevel += 1;
     renderResBar(); renderEffList(); save();
-    toast(`⚡ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}の効率をLv.${a.speedLevel}に強化した!`);
+    if(kind === "transport"){
+      toast(`⚡ コンベアの運搬効率をLv.${a.speedLevel}(1本あたり${transportRateForLevel(a.speedLevel)}個/秒)に強化した!`);
+    } else {
+      toast(`⚡ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}の効率をLv.${a.speedLevel}に強化した!`);
+    }
   }
 }
 // 拠点拡張(効率化タブ)。レベルアップのたびに拠点を北へBASE_EXPANSION_STEPマス拡張する
@@ -1709,20 +1748,6 @@ function buyBaseExpansion(){
   rebuildTransportBelt(); // ベルトコンベアの終点(カウンター側)も拠点拡張で動くため作り直す
   renderResBar(); renderEffList(); save();
   toast(`🏗️ 拠点を北へ${BASE_EXPANSION_STEP}マス拡張した!(計${state.baseExpansion.level}回)`);
-}
-// 木材自動運搬(ベルトコンベア)の導入・レベルアップ。Lv.0→1で導入(同時にベルトコンベアが出現)、
-// 以降のレベルアップは運搬効率(個/秒)のみを強化する
-function buyTransport(){
-  const t = state.automation.transport;
-  if(t.level >= TRANSPORT_MAX) return;
-  const cost = transportCost();
-  if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
-  state.resources.gold -= cost;
-  const wasZero = t.level === 0;
-  t.level += 1;
-  syncTransportBelt();
-  renderResBar(); renderEffList(); save();
-  toast(wasZero ? "⚙️ 木材自動運搬用のベルトコンベアを設置した!" : `⚡ ベルトコンベアの運搬効率をLv.${t.level}に強化した!`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
 function processAutomation(now){
@@ -1793,20 +1818,21 @@ function processAutomation(now){
   if(changed){ renderResBar(); updateWoodPile(); save(); }
 }
 // 木材自動運搬(ベルトコンベア): 現実時間ベースで、木材収集ボックス(harvest.boxWood)から
-// カウンターの在庫(state.resources.wood)へ運搬効率ぶんの木材を移す(他の自動化と同じ方式)
+// カウンターの在庫(state.resources.wood)へ運搬効率ぶんの木材を移す(他の自動化と同じ方式)。
+// 合計運搬量 = 本数(countLevel) × 1本あたりの速度(speedLevelから求まる個/秒)
 function processTransport(now){
   const last = state.transportLastTick || now;
   const elapsedSec = Math.max(0, (now-last)/1000);
   state.transportLastTick = now;
   if(elapsedSec <= 0) return;
   const t = state.automation.transport;
-  if(t.level <= 0) return;
+  if(t.countLevel <= 0) return;
   const harvest = state.automation.harvest;
   if(harvest.boxWood <= 1e-9) return;
   const room = Math.max(0, storageCap() - state.resources.wood);
   if(room <= 1e-9) return;
-  const rate = transportRateFor(t.level);
-  const amount = Math.min(elapsedSec*rate, harvest.boxWood, room);
+  const totalRate = t.countLevel * transportRateForLevel(t.speedLevel);
+  const amount = Math.min(elapsedSec*totalRate, harvest.boxWood, room);
   if(amount > 1e-9){
     harvest.boxWood -= amount;
     state.resources.wood += amount;
@@ -1984,27 +2010,36 @@ function renderMarket(){
 // 自動化は「台数(count)」「効率(speed)」の2トラック。台数はユニットを1つずつ増やし、
 // 効率は1ユニットあたりの性能(伐採時間短縮/受け渡し速度)を上げる
 const AUTOMATION_DEFS = {
-  harvestCount: { name:"伐採自動化(台数)", icon:"⚙️🪓", kind:"harvest", track:"count", place:"伐採マシンを森に設置" },
-  harvestSpeed: { name:"伐採自動化(効率)", icon:"⚡🪓", kind:"harvest", track:"speed" },
-  tradeCount:   { name:"売買自動化(人数)", icon:"⚙️💰", kind:"trade",   track:"count", place:"売買NPCをカウンターに常駐" },
-  tradeSpeed:   { name:"売買自動化(効率)", icon:"⚡💰", kind:"trade",   track:"speed" }
+  harvestCount:   { name:"伐採自動化(台数)",     icon:"⚙️🪓", kind:"harvest",   track:"count", place:"伐採マシンを森に設置" },
+  harvestSpeed:   { name:"伐採自動化(効率)",     icon:"⚡🪓", kind:"harvest",   track:"speed" },
+  tradeCount:     { name:"売買自動化(人数)",     icon:"⚙️💰", kind:"trade",     track:"count", place:"売買NPCをカウンターに常駐" },
+  tradeSpeed:     { name:"売買自動化(効率)",     icon:"⚡💰", kind:"trade",     track:"speed" },
+  transportCount: { name:"木材自動運搬(本数)",   icon:"⚙️🚚", kind:"transport", track:"count" },
+  transportSpeed: { name:"木材自動運搬(効率)",   icon:"⚡🚚", kind:"transport", track:"speed" }
 };
 function automationRow(key, def){
   const a = state.automation[def.kind];
-  const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
-  const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
-  const boxName = def.kind==="harvest" ? "木材収集ボックス" : "G収集ボックス";
   if(def.track === "count"){
     const lv = a.countLevel;
     const atCap = lv >= AUTOMATION_MAX;
     const needsExpansion = def.kind==="trade" && !atCap && (1 + lv + 1) > maxTradeLanesFit();
-    const cost = atCap ? null : automationCountCost(def.kind);
+    const cost = atCap ? null : (def.kind==="transport" ? transportCountCost() : automationCountCost(def.kind));
     let descLine;
-    if(lv===0){
-      descLine = `${def.place}。生産物は拠点の${boxName}に格納される`;
+    if(def.kind === "transport"){
+      // 木材自動運搬はharvest/tradeと違い専用の収集ボックスを持たない(boxWood→resources.woodへ直接運ぶため)
+      descLine = lv===0
+        ? "導入すると木材収集ボックス→カウンターへベルトコンベアが自動で木材を運ぶ"
+        : `稼働中 ${lv}本${atCap?"":` → 次Lv ${lv+1}本`}`;
     } else {
-      const unit = def.kind==="harvest" ? "台" : "体";
-      descLine = `稼働中 ${lv}${unit}${atCap?"":` → 次Lv ${lv+1}${unit}`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+      const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
+      const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
+      const boxName = def.kind==="harvest" ? "木材収集ボックス" : "G収集ボックス";
+      if(lv===0){
+        descLine = `${def.place}。生産物は拠点の${boxName}に格納される`;
+      } else {
+        const unit = def.kind==="harvest" ? "台" : "体";
+        descLine = `稼働中 ${lv}${unit}${atCap?"":` → 次Lv ${lv+1}${unit}`} ・ ${boxName}内 ${boxIcon}${Math.floor(box)}(拠点で回収)`;
+      }
     }
     if(needsExpansion) descLine += ` ・ ⚠️拠点拡張が必要(現在${maxTradeLanesFit()-1}人まで対応)`;
     const btnLabel = lv===0 ? "導入" : `Lv.${lv+1}へ`;
@@ -2014,18 +2049,23 @@ function automationRow(key, def){
     const lv = a.speedLevel;
     const atCap = lv >= AUTOMATION_MAX;
     const locked = a.countLevel <= 0; // 台数0のうちは効率を上げる意味がないため購入不可
-    const cost = atCap ? null : automationEfficiencyCost(def.kind);
+    const cost = atCap ? null : (def.kind==="transport" ? transportSpeedCost() : automationEfficiencyCost(def.kind));
     let descLine;
     if(locked){
-      descLine = `先に${def.kind==="harvest"?"伐採自動化(台数)":"売買自動化(人数)"}を導入してください`;
+      const lockedLabel = def.kind==="harvest" ? "伐採自動化(台数)" : def.kind==="trade" ? "売買自動化(人数)" : "木材自動運搬(本数)";
+      descLine = `先に${lockedLabel}を導入してください`;
     } else if(def.kind==="harvest"){
       const cur = automationHarvestSecondsFor(lv).toFixed(1);
       const next = atCap ? null : automationHarvestSecondsFor(lv+1).toFixed(1);
       descLine = `1台あたり木1本を${cur}秒で伐採${atCap?"":` → 次Lv ${next}秒`}`;
-    } else {
+    } else if(def.kind==="trade"){
       const cur = automationSellRateFor(lv).toFixed(1);
       const next = atCap ? null : automationSellRateFor(lv+1).toFixed(1);
       descLine = `1体あたり${cur}個/秒${atCap?"":` → 次Lv ${next}個/秒`}`;
+    } else {
+      const cur = transportRateForLevel(lv);
+      const next = atCap ? null : transportRateForLevel(lv+1);
+      descLine = `1本あたり${cur}個/秒${atCap?"":` → 次Lv ${next}個/秒`}`;
     }
     const btnLabel = `Lv.${lv+1}へ`;
     return { name:`${def.icon} ${def.name}${lv>0?` Lv.${lv}`:""}`, descLine,
@@ -2084,24 +2124,6 @@ function renderEffList(){
         : `<button class="btn btn-sub" data-expand="1" data-cost="${cost}" ${state.resources.gold<cost?"disabled":""}>${lv===0?"拡張":`${lv+1}回目へ`} 🪙${cost}</button>`}
     </div>`;
   }
-  // 木材自動運搬(ベルトコンベア。自動化とは別枠、専用の購入関数を使う)
-  {
-    const lv = state.automation.transport.level;
-    const atCap = lv >= TRANSPORT_MAX;
-    const cost = atCap ? null : transportCost();
-    const descLine = lv===0
-      ? "導入すると木材収集ボックス→カウンターへベルトコンベアが自動で木材を運ぶ"
-      : `運搬速度 ${transportRateFor(lv).toFixed(1)}個/秒${atCap?"":` → 次Lv ${transportRateFor(lv+1).toFixed(1)}個/秒`}`;
-    html += `<div class="eff-row">
-      <div class="eff-info">
-        <div class="name">🚚 木材自動運搬${lv>0?` Lv.${lv}`:""}</div>
-        <div class="lv">${descLine}</div>
-      </div>
-      ${atCap
-        ? `<button class="btn btn-sub" disabled>MAX</button>`
-        : `<button class="btn btn-sub" data-transport="1" data-cost="${cost}" ${state.resources.gold<cost?"disabled":""}>${lv===0?"導入":`Lv.${lv+1}へ`} 🪙${cost}</button>`}
-    </div>`;
-  }
   wrap.innerHTML = html;
   wrap.querySelectorAll("[data-eff]").forEach(btn=>{
     btn.addEventListener("click", ()=> buyUpgrade(btn.getAttribute("data-eff")));
@@ -2112,9 +2134,6 @@ function renderEffList(){
   });
   wrap.querySelectorAll("[data-expand]").forEach(btn=>{
     btn.addEventListener("click", ()=> buyBaseExpansion());
-  });
-  wrap.querySelectorAll("[data-transport]").forEach(btn=>{
-    btn.addEventListener("click", ()=> buyTransport());
   });
 }
 function buyUpgrade(key){
