@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.24.0">
+<meta name="app-version" content="0.25.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -135,10 +135,6 @@
   .hud-right{
     display:flex; flex-direction:column; align-items:flex-end; gap:4px;
   }
-  .hud-carry{
-    background:#000000aa; color:var(--wood); font-size:11px; font-weight:700;
-    padding:4px 10px; border-radius:20px; white-space:nowrap;
-  }
   .hud-gold{
     background:#000000aa; color:var(--gold); font-size:11px; font-weight:700;
     padding:4px 10px; border-radius:20px; white-space:nowrap;
@@ -150,6 +146,23 @@
     opacity:0; transition:opacity .15s ease; pointer-events:none;
   }
   .hud-action.show{opacity:1;}
+
+  /* 拠点タブ下部の常設バー: 左に木材収集量(1秒毎)・所持ゴールド、右に収集メッセージ(簡略表示) */
+  .stat-bar{
+    margin-top:8px; padding:10px 12px; border-radius:12px;
+    background:var(--panel); border:1px solid var(--card-border);
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    min-height:24px;
+  }
+  .stat-bar-left{ display:flex; flex-direction:column; gap:4px; }
+  .stat-item{ font-size:12px; font-weight:700; white-space:nowrap; }
+  #statWoodRate{ color:var(--wood); }
+  #statGold{ color:var(--gold); }
+  .stat-bar-right{
+    font-size:12px; font-weight:700; color:var(--parchment);
+    opacity:0; transition:opacity .2s ease; text-align:right;
+  }
+  .stat-bar-right.show{ opacity:1; }
 
   .dpad{
     position:absolute; left:8px; bottom:8px; z-index:6;
@@ -234,7 +247,6 @@
         <div class="hud">
           <div class="hud-map" id="hudMapName">🏕️ 拠点</div>
           <div class="hud-right">
-            <div class="hud-carry" id="hudCarry">🪵 運搬中: 0</div>
             <div class="hud-gold" id="hudGold">🪙 0</div>
           </div>
         </div>
@@ -245,6 +257,13 @@
           <button class="dp-right" data-dir="right" aria-label="右へ">▶</button>
           <button class="dp-down" data-dir="down" aria-label="下へ">▼</button>
         </div>
+      </div>
+      <div class="stat-bar">
+        <div class="stat-bar-left">
+          <div class="stat-item" id="statWoodRate">🪵 +0.0/秒</div>
+          <div class="stat-item" id="statGold">🪙 0</div>
+        </div>
+        <div class="stat-bar-right" id="statFeed"></div>
       </div>
     </div>
 
@@ -459,7 +478,7 @@ let BASE_MIN_Z = BASE_MIN_Z_INITIAL;
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
 const DOOR_Z = BASE_MAX_Z + 1;          // 門の位置(拠点のすぐ南)
 const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
-const FOREST_MAX_Z = FOREST_MIN_Z + 6;  // 森ゾーンの南端
+const FOREST_MAX_Z = FOREST_MIN_Z + 9;  // 森ゾーンの南端(v0.25.0で7→10マスに拡張。伐採可能な木も1列追加)
 const STEP_DURATION = 0.14;             // 1マス移動にかける時間(秒)
 const WORKER_STEP_DURATION = 0.18;      // 雇用NPCが1マス移動するのにかける時間(秒)
 const INTERACT_RADIUS = 1.1;            // 隣接マス(距離1)から操作できるように
@@ -607,9 +626,10 @@ const AUTO_BOX_WOOD_PT  = { x:DOOR_TO+1, z:BASE_MAX_Z };        // 木材収集�
 const AUTO_BOX_GOLD_PT  = { x:BASE_MIN_X+2, z:COUNTER_Z_TO };
 // 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
-// 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)
+// 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)。
+// v0.25.0で森を縦方向に3マス拡張したのにあわせ、木の列を1列追加(3列→4列)
 const TREE_DEFS = [];
-for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5]){
+for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5, FOREST_MIN_Z+7]){
   for(let tx = FOREST_MIN_X+1; tx <= FOREST_MAX_X-1; tx += 2){
     TREE_DEFS.push({ x:tx, z:tz });
   }
@@ -1023,7 +1043,7 @@ function completeFrontNpcPurchase(laneIdx, target){
     state.automation.trade.boxGold += reward; // 現地(常駐NPCのそば)で回収するまで蓄積、トーストは出さない
   } else {
     state.resources.gold += reward;
-    toast(`🤝 取引成立!+${reward}G`);
+    showCollectMsg(`+${reward}🪙`);
   }
   ensureQueueFilled(laneIdx);
   repositionNpcQueue(laneIdx);
@@ -1455,7 +1475,8 @@ function updateInteractions(dt){
       setTreeVisual(t);
       const gained = woodPerTree();
       p.carryWood = Math.min(CARRY_CAP, p.carryWood + gained);
-      toast(`🪓 木材を${gained}手に入れた!`);
+      logWoodCollected(gained);
+      showCollectMsg(`+${gained}🪵`);
       updateHud(); save();
       harvestingTreeIdx = -1;
     } else {
@@ -1510,7 +1531,7 @@ function updateInteractions(dt){
       state.resources.wood += take;
       state.automation.harvest.boxWood -= take;
       renderResBar(); updateWoodPile(); save();
-      toast(`📦 木材収集ボックスから木材${Math.floor(take)}を回収!`);
+      showCollectMsg(`+${Math.floor(take)}🪵`);
     }
   }
   // 売買自動化: G収集ボックス(拠点)に近づくと、貯まっているゴールドを自動回収する
@@ -1520,7 +1541,7 @@ function updateInteractions(dt){
     state.resources.gold += take;
     state.automation.trade.boxGold = 0;
     renderResBar(); save();
-    toast(`📦 G収集ボックスからゴールド${Math.floor(take)}を回収!`);
+    showCollectMsg(`+${Math.floor(take)}🪙`);
   }
 
   if(!actionShown) hideAction();
@@ -1616,7 +1637,7 @@ function processHiredWorkers(now){
     if(!w.arrived) continue;
     const room = Math.max(0, storageCap() - state.resources.wood);
     const produced = Math.min(elapsedSec*HARVEST_NPC_RATE, w.remaining, room);
-    if(produced > 0){ state.resources.wood += produced; w.remaining -= produced; changed = true; }
+    if(produced > 0){ state.resources.wood += produced; w.remaining -= produced; changed = true; logWoodCollected(produced); }
     if(w.remaining <= 1e-9){ state.harvestWorkers.splice(i,1); changed = true; }
   }
   // 売買NPC(単発雇用、レーン0=プレイヤー用の列で代行): 売買ポイントでの受け渡しを代行
@@ -1730,6 +1751,7 @@ function processAutomation(now){
         t.state = "stump"; t.progress = 0; t.stumpUntil = Date.now() + REGROW_SECONDS*1000;
         setTreeVisual(t);
         harvest.boxWood = Math.min(STORAGE_CAP, harvest.boxWood + gained);
+        logWoodCollected(gained);
         assignMachineTree(m, (completedIdx+1) % trees.length); // 次の番号の木へ(最後まで行ったら1番から)
         changed = true;
       }
@@ -1806,7 +1828,35 @@ function currentZoneLabel(){
 }
 function updateHud(){
   document.getElementById("hudMapName").textContent = currentZoneLabel();
-  document.getElementById("hudCarry").textContent = `🪵 運搬中: ${state.player.carryWood}`;
+}
+
+// --- 拠点タブ下部の常設バー(木材収集量/秒・ゴールド・収集メッセージ) ---------------
+// 「木材収集」= 木を伐って新たに木材を得る瞬間(手動伐採・伐採自動化・雇用の伐採NPC)のみを対象とする。
+// 置き場への運搬・収集ボックスからの回収・自動運搬はどれも「既に得た木材の移動」でしかないため対象外
+// (直近1秒間に収集した量を記録しておき、表示のたびに古いログを間引いて合計する簡易な瞬間レート計)
+let woodCollectLog = []; // {t, amount}[](セーブ対象外・表示用のみ)
+function logWoodCollected(amount){
+  if(amount > 0) woodCollectLog.push({ t: Date.now(), amount });
+}
+function currentWoodRate(){
+  const now = Date.now();
+  woodCollectLog = woodCollectLog.filter(e => now - e.t <= 1000);
+  return woodCollectLog.reduce((sum,e)=> sum + e.amount, 0);
+}
+function updateStatBar(){
+  document.getElementById("statWoodRate").textContent = `🪵 +${currentWoodRate().toFixed(1)}/秒`;
+  document.getElementById("statGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
+}
+// ゴールド・木材の「回収」系メッセージ(手に入れた/回収した)を、フローティングのtoast()ではなく
+// 常設バーの右側に簡略化した文言で短く表示する(頻繁に発生しうるため、画面中央のトーストで
+// 毎回埋め尽くさないための専用の軽量表示)
+let collectFeedTimer = null;
+function showCollectMsg(text){
+  const el = document.getElementById("statFeed");
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(collectFeedTimer);
+  collectFeedTimer = setTimeout(()=> el.classList.remove("show"), 1800);
 }
 
 function animate(ts){
@@ -1835,6 +1885,7 @@ function animate(ts){
   updateAutomationVisuals(ts);
   updateTransportBeltVisual(ts);
   updateHud();
+  updateStatBar();
   updatePlayerMesh();
   world.renderer.render(world.scene, world.camera);
 }
@@ -1870,6 +1921,7 @@ function fmtTime(ms){
 // のフル再描画を呼ぶ
 function renderResBar(){
   document.getElementById("hudGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
+  document.getElementById("statGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
   refreshEffButtons();
   refreshHireButtons();
 }
