@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.23.0">
+<meta name="app-version" content="0.24.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1736,16 +1736,36 @@ function processAutomation(now){
     }
   }
 
-  // 売買自動化: 台数レベル分(=開放されたレーン数ぶん)のNPCが、各自の列に対して独立に売買を進める
+  // 売買自動化: 台数レベル分(=開放されたレーン数ぶん)のNPCが、各自の列に対して独立に売買を進める。
+  // 木材の供給元はstate.resources.wood(プレイヤーの手動置き場・木材自動運搬のどちらも同じここへ
+  // 貯まる)。木材が全レーンの希望量(elapsedSec*rate)をまかなえない場合、レーン番号の若い順に
+  // 使い切ってしまわないよう、残量をまだ欲しがっている全レーンへ均等に配分する(ラウンドロビン:
+  // 1回で配りきれなかった分は、まだ受け取れるレーンだけで次のラウンドへ持ち越す)
   const trade = state.automation.trade;
   const tLv = trade.countLevel;
   if(tLv > 0 && state.resources.wood > 1e-9){
     const rate = automationSellRateFor(trade.speedLevel);
+    const perLaneWant = elapsedSec * rate;
+    let pending = [];
     for(let lane=1; lane<=tLv; lane++){
-      if(npcQueues[lane].length === 0) continue;
-      const amount = elapsedSec * rate;
-      const used = amount > 0 ? processTradeUnits(lane, amount, "box") : 0;
-      if(used > 0) changed = true;
+      if(npcQueues[lane].length > 0) pending.push({ lane, want: perLaneWant });
+    }
+    let round = 0;
+    while(pending.length > 0 && state.resources.wood > 1e-9 && round < 20){
+      round++;
+      const share = state.resources.wood / pending.length; // 残っている木材を、まだ欲しがっているレーン数で均等割り
+      const next = [];
+      for(const entry of pending){
+        const give = Math.min(share, entry.want, state.resources.wood);
+        if(give <= 1e-9) continue;
+        const used = processTradeUnits(entry.lane, give, "box");
+        if(used > 1e-9) changed = true;
+        const remainWant = entry.want - used;
+        // 割り当て分をほぼ使い切れた(=まだ欲しがっている)レーンだけ次ラウンドの再配分対象にする。
+        // 客の列が途切れた等で割り当てを使い切れなかったレーンは、これ以上配っても無駄なので除外する
+        if(remainWant > 1e-9 && used >= give - 1e-9) next.push({ lane: entry.lane, want: remainWant });
+      }
+      pending = next;
     }
   }
   if(changed){ renderResBar(); updateWoodPile(); save(); }
@@ -1808,8 +1828,8 @@ function animate(ts){
   updateAutomationHarvestWalk(dt);
   updateExitingNpcs(dt);
   processHiredWorkers(Date.now());
+  processTransport(Date.now()); // 自動運搬(boxWood→resources.wood)を先に進め、同じフレーム内で売買自動化がその木材を使えるようにする
   processAutomation(Date.now());
-  processTransport(Date.now());
   updateInteractions(dt); // harvestingTreeIdx(手動伐採中の木)をこのフレーム分で確定させてから、葉エフェクトの表示判定に使う
   updateTreeLeafEffects(ts);
   updateAutomationVisuals(ts);
