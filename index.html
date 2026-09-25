@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.27.0">
+<meta name="app-version" content="0.28.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -132,13 +132,6 @@
     background:#000000aa; color:var(--parchment); font-size:11px; font-weight:700;
     padding:4px 10px; border-radius:20px;
   }
-  .hud-right{
-    display:flex; flex-direction:column; align-items:flex-end; gap:4px;
-  }
-  .hud-gold{
-    background:#000000aa; color:var(--gold); font-size:11px; font-weight:700;
-    padding:4px 10px; border-radius:20px; white-space:nowrap;
-  }
   .hud-action{
     position:absolute; left:50%; bottom:10px; transform:translateX(-50%);
     background:#000000cc; color:var(--parchment); font-size:12px;
@@ -147,7 +140,7 @@
   }
   .hud-action.show{opacity:1;}
 
-  /* 拠点タブ下部の常設バー: 左に木材収集量(1秒毎)・所持ゴールド、右に収集メッセージ(簡略表示) */
+  /* 拠点タブ下部の常設バー: 左に木材収集量(1秒毎)・木材堆積量・所持ゴールド、右に収集メッセージ(簡略表示) */
   .stat-bar{
     margin-top:8px; padding:10px 12px; border-radius:12px;
     background:var(--panel); border:1px solid var(--card-border);
@@ -157,6 +150,7 @@
   .stat-bar-left{ display:flex; flex-direction:column; gap:4px; }
   .stat-item{ font-size:12px; font-weight:700; white-space:nowrap; }
   #statWoodRate{ color:var(--wood); }
+  #statWoodStock{ color:var(--wood); }
   #statGold{ color:var(--gold); }
   .stat-bar-right{
     font-size:12px; font-weight:700; color:var(--parchment);
@@ -246,9 +240,6 @@
         <canvas id="gameCanvas"></canvas>
         <div class="hud">
           <div class="hud-map" id="hudMapName">🏕️ 拠点</div>
-          <div class="hud-right">
-            <div class="hud-gold" id="hudGold">🪙 0</div>
-          </div>
         </div>
         <div class="hud-action" id="hudAction"></div>
         <div class="dpad">
@@ -261,6 +252,7 @@
       <div class="stat-bar">
         <div class="stat-bar-left">
           <div class="stat-item" id="statWoodRate">🪵 +0.0/秒</div>
+          <div class="stat-item" id="statWoodStock">📦 0</div>
           <div class="stat-item" id="statGold">🪙 0</div>
         </div>
         <div class="stat-bar-right" id="statFeed"></div>
@@ -445,7 +437,7 @@ function sell(resKey, amount){
   if(amount <= 0) return;
   state.resources[resKey] -= amount;
   state.resources.gold += Math.round(amount * rate);
-  render(); save();
+  render(); updateWoodPile(); save();
 }
 function buy(resKey, amount){
   const rate = MARKET_RATES[resKey].buy;
@@ -458,7 +450,7 @@ function buy(resKey, amount){
   const actualCost = Math.ceil(actualAmount * rate);
   state.resources.gold -= actualCost;
   state.resources[resKey] += actualAmount;
-  render(); save();
+  render(); updateWoodPile(); save();
 }
 
 const MARKET_RATES = {
@@ -1082,6 +1074,8 @@ function processTradeUnits(laneIdx, amount, target){
   return used;
 }
 function updateWoodPile(){
+  const stockEl = document.getElementById("statWoodStock");
+  if(stockEl) stockEl.textContent = `📦 ${fmt(state.resources.wood)}`;
   if(!world || !world.pileLogs) return;
   const count = Math.max(0, Math.min(world.pileLogs.length, Math.round(state.resources.wood / PILE_UNIT)));
   world.pileLogs.forEach((mesh,i)=>{ mesh.visible = i < count; });
@@ -1947,7 +1941,6 @@ function fmtTime(ms){
 // 内容そのものが変わる購入直後は、各buy*/hireWorker側で個別にrenderEffList()/renderNpcHireList()
 // のフル再描画を呼ぶ
 function renderResBar(){
-  document.getElementById("hudGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
   document.getElementById("statGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
   refreshEffButtons();
   refreshHireButtons();
