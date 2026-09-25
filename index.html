@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.26.0">
+<meta name="app-version" content="0.27.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -487,7 +487,7 @@ let BASE_MIN_Z = BASE_MIN_Z_INITIAL;
 const DOOR_FROM = -1, DOOR_TO = 1;      // 門(扉)のx範囲(マス目)
 const DOOR_Z = BASE_MAX_Z + 1;          // 門の位置(拠点のすぐ南)
 const FOREST_MIN_Z = DOOR_Z + 1;        // 森ゾーンの開始z(縦方向は拠点と同じ幅のまま)
-const FOREST_MAX_Z = FOREST_MIN_Z + 15; // 森ゾーンの南端(v0.25.0で7→10マス、v0.26.0で10→16マスに拡張。伐採可能な木も都度追加)
+const FOREST_MAX_Z = FOREST_MIN_Z + 14; // 森ゾーンの南端(v0.25.0で7→10マス、v0.26.0で10→16マス、v0.27.0で16→15マスに縮小。伐採可能な木も都度追加)
 const STEP_DURATION = 0.14;             // 1マス移動にかける時間(秒)
 const WORKER_STEP_DURATION = 0.18;      // 雇用NPCが1マス移動するのにかける時間(秒)
 const INTERACT_RADIUS = 1.1;            // 隣接マス(距離1)から操作できるように
@@ -639,9 +639,10 @@ const AUTO_BOX_GOLD_PT  = { x:BASE_MIN_X+2, z:COUNTER_Z_TO };
 // 常駐売買NPCの立ち位置はレーンごとにtradeLaneNpcPos(i)で決まる(売買レーンのすぐ隣)
 
 // 森ゾーン: 拡張した横幅いっぱいに、間隔をあけて木を配置(既存の間隔2マスを踏襲)。
-// v0.25.0で森を縦方向に3マス拡張し木の列を1列追加(3列→4列)、v0.26.0でさらに6マス拡張し2列追加(4列→6列)
+// v0.25.0で森を縦方向に3マス拡張し木の列を1列追加(3列→4列)、v0.26.0でさらに6マス拡張し2列追加(4列→6列)、
+// v0.27.0で奥行きを1マス縮小しつつ木の列を1列追加(6列→7列。末尾の余白が広すぎたため縮めつつ詰めた)
 const TREE_DEFS = [];
-for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5, FOREST_MIN_Z+7, FOREST_MIN_Z+9, FOREST_MIN_Z+11]){
+for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5, FOREST_MIN_Z+7, FOREST_MIN_Z+9, FOREST_MIN_Z+11, FOREST_MIN_Z+13]){
   for(let tx = FOREST_MIN_X+1; tx <= FOREST_MAX_X-1; tx += 2){
     TREE_DEFS.push({ x:tx, z:tz });
   }
