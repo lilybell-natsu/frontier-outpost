@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#2b3a2a">
-<meta name="app-version" content="0.28.0">
+<meta name="app-version" content="0.29.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -94,22 +94,6 @@
   .btn-sub:disabled{opacity:.4; cursor:not-allowed;}
   .btn-danger{background:linear-gradient(180deg,#e17a68,#b7402f); color:#2b0d08;}
 
-  /* market */
-  .mcard{
-    background:linear-gradient(180deg, var(--panel-2) 0%, #2a2116 100%);
-    border:1px solid var(--card-border);
-    border-radius:14px;
-    padding:12px;
-    margin-bottom:12px;
-    box-shadow:var(--shadow);
-  }
-  .mcard-head{display:flex; align-items:center; gap:8px; margin-bottom:8px;}
-  .mcard-head .ic{font-size:20px;}
-  .mcard-head .t{font-size:14px; font-weight:700;}
-  .mcard-head .rate{margin-left:auto; font-size:11px; color:var(--parchment-dim);}
-  .trade-btns{display:flex; gap:6px; flex-wrap:wrap;}
-  .trade-btns .btn{flex:1; min-width:64px;}
-  .mcard .sub-label{font-size:11px; color:var(--parchment-dim); margin:8px 0 4px;}
 
   .locked-note{
     text-align:center; color:var(--parchment-dim); font-size:12.5px;
@@ -157,6 +141,7 @@
     opacity:0; transition:opacity .2s ease; text-align:right;
   }
   .stat-bar-right.show{ opacity:1; }
+  #bizMeatStock{ display:block; color:var(--food); margin:0 0 12px; }
 
   .dpad{
     position:absolute; left:8px; bottom:8px; z-index:6;
@@ -269,9 +254,10 @@
       <div id="npcHireList"></div>
     </div>
 
-    <div class="view" id="view-market">
-      <div class="section-title">市場</div>
-      <div id="marketArea"></div>
+    <div class="view" id="view-newbiz">
+      <div class="section-title">🏗️ 新規事業</div>
+      <div class="stat-item" id="bizMeatStock">🥩 現在の肉: 0</div>
+      <div id="newBizList"></div>
     </div>
   </main>
 
@@ -281,7 +267,7 @@
     <button class="nav-btn active" data-view="view-base"><span class="ic">🏕️</span>拠点</button>
     <button class="nav-btn" data-view="view-eff"><span class="ic">🛠️</span>効率化</button>
     <button class="nav-btn" data-view="view-hire"><span class="ic">👷</span>雇用</button>
-    <button class="nav-btn" data-view="view-market"><span class="ic">⚖️</span>市場</button>
+    <button class="nav-btn" data-view="view-newbiz"><span class="ic">🏗️</span>新規事業</button>
   </nav>
 </div>
 
@@ -319,27 +305,33 @@ let state = null;
 function defaultState(){
   return {
     v: GAME_VERSION,
-    resources: { wood:0, food:0, gold:0 },
+    resources: { wood:0, food:0, gold:0, meat:0 },
     player: { x: PLAYER_SPAWN.x, z: PLAYER_SPAWN.z, carryWood:6 },
     harvestWorkers: [], // 伐採NPC(雇用中の個体、最大5体)
     sellWorkers: [],    // 売買NPC(雇用中の個体、最大5体)
     hiredLastTick: Date.now(),
     upgrades: { amount:0, speed:0, price:0 },
-    // 伐採自動化(森にマシンを設置)・売買自動化(カウンターにNPCを常駐)。
-    // 通常の雇用NPC(単発・消耗式)とは別枠の、Gで導入する常設の全自動生産ライン。
+    // 伐採自動化(森にマシンを設置)・売買自動化(カウンターにNPCを常駐)・木材自動運搬・狩猟自動化
+    // (新規事業の肉の販売)。通常の雇用NPC(単発・消耗式)とは別枠の、Gで導入する常設の全自動生産ライン。
     // 生産物は自動化収集ボックス(木材収集ボックス=boxWood/G収集ボックス=boxGold)に貯まり、
-    // どちらも拠点内に設置されるので、プレイヤーは拠点から出ずに回収できる
-    // countLevel=台数(伐採マシンの台数/常駐売買NPCの人数)、speedLevel=1ユニットあたりの効率。
+    // どちらも拠点内に設置されるので、プレイヤーは拠点から出ずに回収できる(狩猟自動化は例外で、
+    // 収集ボックスを介さず直接state.resources.meatへ生産する。詳細はhunting関連のコメントを参照)
+    // countLevel=台数(伐採マシンの台数/常駐売買NPCの人数/猟師の人数)、speedLevel=1ユニットあたりの効率。
     // 伐採マシンはcountLevelぶんmachinesに要素が並ぶ(各要素が{treeIdx,pos,progress,arrived,stepTimer}を
-    // 持つ。雇用NPCのw.treeIdx/w.pos/w.arrivedと同じ考え方)
+    // 持つ。雇用NPCのw.treeIdx/w.pos/w.arrivedと同じ考え方)。猟師(hunters)も同じ考え方でanimalIdxを持つ
     automation: {
       harvest:   { countLevel:0, speedLevel:0, boxWood:0, machines:[] },
       trade:     { countLevel:0, speedLevel:0, boxGold:0 },
-      transport: { countLevel:0, speedLevel:0 } // 木材自動運搬(ベルトコンベア)。本数(countLevel)/効率(speedLevel)の2トラック
+      transport: { countLevel:0, speedLevel:0 }, // 木材自動運搬(ベルトコンベア)。本数(countLevel)/効率(speedLevel)の2トラック
+      hunting:   { countLevel:0, speedLevel:0, hunters:[] } // 狩猟自動化(新規事業: 肉の販売)。人数(countLevel)/効率(speedLevel)の2トラック
     },
     automationLastTick: Date.now(),
     transportLastTick: Date.now(),
-    baseExpansion: { level:0 } // 効率化タブの拠点拡張(レベルごとに北へBASE_EXPANSION_STEPマス拡張)
+    huntingLastTick: Date.now(),
+    baseExpansion: { level:0 }, // 効率化タブの拠点拡張(レベルごとに北へBASE_EXPANSION_STEPマス拡張)
+    // 新規事業(新規事業タブ)。spaceLevelは「事業スペース拡張」の購入回数で、レベルごとに次の新規事業
+    // (今回はLv.1=肉の販売/狩猟)が解放される。将来、魚・小麦などを追加する際もこの仕組みを使い回す想定
+    newBusiness: { spaceLevel:0 }
   };
 }
 
@@ -351,7 +343,8 @@ function load(){
     if(!parsed || parsed.v !== GAME_VERSION) return defaultState();
     // 旧セーブ互換: 新フィールドが無ければ補う
     if(!parsed.player) parsed.player = { x: PLAYER_SPAWN.x, z: PLAYER_SPAWN.z, carryWood:6 };
-    if(!parsed.resources) parsed.resources = { wood:0, food:0, gold:0 };
+    if(!parsed.resources) parsed.resources = { wood:0, food:0, gold:0, meat:0 };
+    if(parsed.resources.meat === undefined) parsed.resources.meat = 0;
     if(!parsed.harvestWorkers) parsed.harvestWorkers = [];
     if(!parsed.sellWorkers) parsed.sellWorkers = [];
     if(!parsed.hiredLastTick) parsed.hiredLastTick = Date.now();
@@ -400,9 +393,21 @@ function load(){
       parsed.automation.transport.speedLevel = oldLv;
     }
     delete parsed.automation.transport.level;
+    if(!parsed.automation.hunting) parsed.automation.hunting = { countLevel:0, speedLevel:0, hunters:[] };
+    if(!parsed.automation.hunting.hunters) parsed.automation.hunting.hunters = [];
+    parsed.automation.hunting.hunters.forEach(h=>{
+      if(h.animalIdx === undefined) h.animalIdx = null;
+      if(h.pos === undefined) h.pos = null;
+      if(h.progress === undefined) h.progress = 0;
+      if(h.arrived === undefined) h.arrived = false;
+      if(h.stepTimer === undefined) h.stepTimer = 0;
+    });
     if(!parsed.automationLastTick) parsed.automationLastTick = Date.now();
     if(!parsed.transportLastTick) parsed.transportLastTick = Date.now();
+    if(!parsed.huntingLastTick) parsed.huntingLastTick = Date.now();
     if(!parsed.baseExpansion) parsed.baseExpansion = { level:0 };
+    if(!parsed.newBusiness) parsed.newBusiness = { spaceLevel:0 };
+    syncNewBizSpaceLevel(parsed); // blocked()が東の門・狩猟エリアの通行判定に使うため、安全チェックより前に確定させる
     delete parsed.hiredJob; delete parsed.boxWood; delete parsed.autoSell; delete parsed.player.map; // 旧仕様の名残を掃除(拠点と森を1枚のマップに統合)
     // 座標はグリッド(整数)前提のため、旧セーブの端数座標は最寄りマスへ丸める
     parsed.player.x = Math.round(parsed.player.x);
@@ -427,36 +432,6 @@ function save(){
   }catch(e){ /* storage disabled (private mode / data: url) - ignore */ }
 }
 function storageCap(){ return STORAGE_CAP; }
-
-/* =========================================================
-   アクション(市場タブでの資源売買)
-   ========================================================= */
-function sell(resKey, amount){
-  const rate = MARKET_RATES[resKey].sell;
-  amount = Math.min(amount, Math.floor(state.resources[resKey]));
-  if(amount <= 0) return;
-  state.resources[resKey] -= amount;
-  state.resources.gold += Math.round(amount * rate);
-  render(); updateWoodPile(); save();
-}
-function buy(resKey, amount){
-  const rate = MARKET_RATES[resKey].buy;
-  const cost = Math.ceil(amount * rate);
-  if(state.resources.gold < cost) { toast("ゴールドが足りない"); return; }
-  const cap = storageCap();
-  const room = cap - state.resources[resKey];
-  if(room <= 0){ toast("倉庫が満杯"); return; }
-  const actualAmount = Math.min(amount, room);
-  const actualCost = Math.ceil(actualAmount * rate);
-  state.resources.gold -= actualCost;
-  state.resources[resKey] += actualAmount;
-  render(); updateWoodPile(); save();
-}
-
-const MARKET_RATES = {
-  wood: { sell:0.28, buy:0.55 },
-  food: { sell:0.35, buy:0.65 }
-};
 
 /* =========================================================
    拠点マップ(3D ワールド)
@@ -640,8 +615,82 @@ for(const tz of [FOREST_MIN_Z+1, FOREST_MIN_Z+3, FOREST_MIN_Z+5, FOREST_MIN_Z+7,
   }
 }
 
+/* =========================================================
+   新規事業(新規事業タブ)
+   ========================================================= */
+// 「事業スペース拡張」を高額なゴールドで購入すると、拠点の東側に新規事業用の区画が1つ解放される。
+// spaceLevelは解放した回数で、レベルごとに次の新規事業が使えるようになる想定
+// (Lv.1=肉の販売/狩猟。魚・小麦など将来の追加はこの仕組みを使い回し、Lv.2以降に割り当てる)。
+// 拠点拡張(北)とは別軸の拡張で、拠点の東西幅(BASE_MIN_X/MAX_X)自体は変更しない
+const NEWBIZ_SPACE_MAX = 5;             // 将来の事業追加に備えた上限(現時点で実装済みなのは狩猟のみ)
+const NEWBIZ_SPACE_UNLOCK_COST = 5000;  // 事業スペース拡張 Lv.0→1(狩猟エリア解放)に必要なゴールド
+function newBizSpaceCost(){
+  const lv = state.newBusiness.spaceLevel;
+  if(lv >= NEWBIZ_SPACE_MAX) return null;
+  return Math.round(NEWBIZ_SPACE_UNLOCK_COST * Math.pow(2.3, lv));
+}
+// blocked()は拠点拡張のBASE_MIN_Zと同じ理由(load()内ではまだグローバルstateが未代入のため)で、
+// state.newBusiness.spaceLevelを直接参照できない。recomputeBaseLayoutと同じパターンで、
+// 明示的に渡されたsから module変数へ複製しておく
+let newBizSpaceLevel = 0;
+function syncNewBizSpaceLevel(s){ newBizSpaceLevel = s.newBusiness.spaceLevel; }
+
+// 東側の門(事業スペース未解放の間は壁のまま、解放すると通れるようになる)。
+// 北の門(DOOR_FROM/DOOR_TO/DOOR_Z)と同じ考え方だが、東の壁に開くので隙間はx方向ではなくz方向
+const EAST_DOOR_X = BASE_MAX_X + 1;         // 門の位置(拠点のすぐ東。壁そのものの座標)
+const EAST_DOOR_Z_FROM = 0, EAST_DOOR_Z_TO = 2; // 門の隙間のz範囲(3マス幅)
+function inEastDoorGap(z){ return z >= EAST_DOOR_Z_FROM && z <= EAST_DOOR_Z_TO; }
+
+// 狩猟エリア(東の門のさらに東)。森と同様、拠点とは別の独立したゾーンとして扱う
+const HUNT_MIN_X = EAST_DOOR_X + 1;
+const HUNT_MAX_X = HUNT_MIN_X + 6;          // 7マス幅(拠点・森と同じ横幅の考え方)
+const HUNT_MIN_Z = EAST_DOOR_Z_FROM - 1;
+const HUNT_MAX_Z = EAST_DOOR_Z_TO + 1;      // 5マス奥行き(門の隙間+前後1マスずつの余白)
+const AUTO_HUNT_PT  = { x: HUNT_MIN_X, z: HUNT_MAX_Z };     // 猟師の初期位置(導入後は担当の獲物まで歩いて移動する)
+const MEAT_SELL_PT  = { x: HUNT_MIN_X, z: EAST_DOOR_Z_FROM+1 }; // 肉販売カウンター(門を入ってすぐ)
+
+// 獲物(鹿)。木と同じ間隔2マスのパターンを踏襲し、6頭を2行×3列で配置
+const ANIMAL_DEFS = [];
+for(const az of [HUNT_MIN_Z+1, HUNT_MIN_Z+3]){
+  for(let ax = HUNT_MIN_X+1; ax <= HUNT_MAX_X-1; ax += 2){
+    ANIMAL_DEFS.push({ x:ax, z:az });
+  }
+}
+const ANIMAL_RESPAWN_SECONDS = 6; // 狩猟後に獲物が元に戻るまでの時間(木の再生より長め)
+const MEAT_PER_ANIMAL = 4;        // 1頭あたりの獲得肉
+
+// 狩猟自動化: 伐採自動化と同じ「人数(countLevel)」「効率(speedLevel)」の2トラック。ただし専用の
+// 収集ボックスは持たず、猟師が獲物を仕留めるたびに直接state.resources.meatへ加算する(肉の経済は
+// 木材より1段シンプルな設計にして、今後の新規事業(魚・小麦など)を追加しやすいテンプレートにする)
+const HUNTING_COUNT_UNLOCK_COST = 800;    // 人数トラック Lv.0→1(初回導入)に必要なゴールド
+const HUNTING_EFFICIENCY_UNLOCK_COST = 600; // 効率トラック Lv.0→1に必要なゴールド
+function huntingCountCost(){
+  const lv = state.automation.hunting.countLevel;
+  if(lv >= AUTOMATION_MAX) return null;
+  if(lv === 0) return HUNTING_COUNT_UNLOCK_COST;
+  return Math.round(HUNTING_COUNT_UNLOCK_COST * Math.pow(2.2, lv));
+}
+function huntingEfficiencyCost(){
+  const lv = state.automation.hunting.speedLevel;
+  if(lv >= AUTOMATION_MAX) return null;
+  if(lv === 0) return HUNTING_EFFICIENCY_UNLOCK_COST;
+  return Math.round(HUNTING_EFFICIENCY_UNLOCK_COST * Math.pow(2.0, lv));
+}
+const HUNTING_SECONDS_BASE = 8;   // 効率Lv.0での1頭あたり所要秒数(木材より時間がかかる)
+const HUNTING_SECONDS_STEP = 0.5; // 効率Lvごとの短縮秒数
+const HUNTING_SECONDS_MIN = 3.0;  // 短縮の下限(Lv.10で到達)
+function huntingSecondsFor(lv){
+  return Math.max(HUNTING_SECONDS_MIN, HUNTING_SECONDS_BASE - lv*HUNTING_SECONDS_STEP);
+}
+// 肉販売カウンター: 客NPCは置かず、近づいている間だけ肉が自動で売れる簡易な方式
+// (木材のような客NPCの列を新規事業ごとに複製すると実装量が膨らみすぎるため、よりシンプルな
+// 「カウンターに立っている間売れる」方式を採用。今後追加する魚・小麦などもこの方式を踏襲する想定)
+const MEAT_SELL_RATE_PER_SEC = 2; // 1秒あたりに売れる肉の量
+const MEAT_PRICE = 5;             // 肉1個あたりの単価(木材の取引より高単価)
+
 let world = null;           // three.js関連オブジェクト一式(initSceneで構築)
 let trees = TREE_DEFS.map(p => ({ x:p.x, z:p.z, state:"tree", progress:0, stumpUntil:0, mesh:null }));
+let animals = ANIMAL_DEFS.map(p => ({ x:p.x, z:p.z, state:"animal", progress:0, goneUntil:0, mesh:null })); // 狩猟エリアの獲物(木のtreesと同じ考え方)
 let heldDir = null;         // 十字キー/矢印キーで押下中の方向
 let stepping = false;       // 1マス移動アニメーションの進行中かどうか
 let stepFrom = {x:0,z:0}, stepTo = {x:0,z:0}, stepT = 0;
@@ -652,18 +701,26 @@ let npcQueues = Array.from({length: TRADE_LANE_MAX}, () => []);
 let npcColorIdx = 0;
 let lastFrameTime = null;
 let doorSwing = 0;          // 扉の開き具合(0=閉,1=開)。プレイヤーが近づくと自動で開閉する(演出のみ、移動はブロックしない)
+let eastDoorSwing = 0;      // 東の門(新規事業スペース)の開き具合。doorSwingと同じ考え方
 let exitingNpcs = [];       // 取引完了後、退場アニメーション中の客NPC(右へ2マス→列の後方側へ1マスずつ、待機エリア外で消滅)
 
 function distTo(x,z,px,pz){ const dx=x-px, dz=z-pz; return Math.sqrt(dx*dx+dz*dz); }
 function inDoorGap(x){ return x >= DOOR_FROM && x <= DOOR_TO; }
 
-// 拠点ゾーン・扉・森ゾーンを1つの連続したマップとして判定する。
-// NPCエリア・効率化エリアは床のみ(通行可)、木もすり抜けられるので、境界の判定だけでよい
+// 拠点ゾーン・扉・森ゾーン・(解放済みなら)東の門・狩猟エリアを1つの連続したマップとして判定する。
+// NPCエリア・効率化エリアは床のみ(通行可)、木もすり抜けられるので、境界の判定だけでよい。
+// 各ゾーンを「通れるならfalseを返す」独立した矩形判定として列挙し、どれにも該当しなければ
+// 最後にtrue(ブロック)を返す構成にしている。狩猟エリアはz範囲が拠点のz範囲(BASE_MIN_Z〜
+// BASE_MAX_Z)と重なるため、以前の「z範囲でまず拠点ゾーンかどうかを判定し、該当すればx方向の
+// 判定だけで確定させる」という構成だと、狩猟エリアの判定に到達する前に拠点ゾーンの東壁判定で
+// ブロック済みとして確定してしまう不具合があった(実機テストで発見・修正)
 function blocked(x,z){
-  if(z >= BASE_MIN_Z && z <= BASE_MAX_Z) return x < BASE_MIN_X || x > BASE_MAX_X; // 拠点ゾーン(西端=木材売買カウンター)
-  if(z === DOOR_Z) return !inDoorGap(x); // 門(扉の幅だけ通れる)
-  if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z) return x < FOREST_MIN_X || x > FOREST_MAX_X; // 森ゾーン(客待機エリアまで拡張した横幅)
-  return true; // 範囲外
+  if(x >= BASE_MIN_X && x <= BASE_MAX_X && z >= BASE_MIN_Z && z <= BASE_MAX_Z) return false; // 拠点ゾーン内
+  if(newBizSpaceLevel >= 1 && x === EAST_DOOR_X && inEastDoorGap(z)) return false; // 東の門(事業スペース解放後のみ、隙間だけ通れる)
+  if(newBizSpaceLevel >= 1 && x >= HUNT_MIN_X && x <= HUNT_MAX_X && z >= HUNT_MIN_Z && z <= HUNT_MAX_Z) return false; // 狩猟エリア(事業スペース解放後のみ)
+  if(z === DOOR_Z && inDoorGap(x)) return false; // 北の門(扉の幅だけ通れる)
+  if(z >= FOREST_MIN_Z && z <= FOREST_MAX_Z && x >= FOREST_MIN_X && x <= FOREST_MAX_X) return false; // 森ゾーン(客待機エリアまで拡張した横幅)
+  return true; // どれにも該当しなければブロック
 }
 
 function addBox(group, mat, x,y,z, sx,sy,sz){
@@ -701,9 +758,17 @@ function buildFence(group){
   const baseWidth = (BASE_MAX_X - BASE_MIN_X + 1);
   const forestWidth = (FOREST_MAX_X - FOREST_MIN_X + 1);
   addBox(group, mat, 0, 0.8, BASE_MIN_Z-1, baseWidth, 1.6, 0.4);              // 北(拠点)
-  // 東: 拠点部分(拠点幅、扉の行まで)+ 森部分(森幅、扉の行から南)
-  const baseEastZLen = DOOR_Z - (BASE_MIN_Z-1);
-  addBox(group, mat, BASE_MAX_X+1, 0.8, ((BASE_MIN_Z-1)+DOOR_Z)/2, 0.4, 1.6, baseEastZLen);
+  // 東: 拠点部分(拠点幅、扉の行まで)+ 森部分(森幅、扉の行から南)。
+  // 新規事業スペースが解放済みなら、拠点部分の東壁に東の門(EAST_DOOR_Z_FROM〜TO)の隙間を開ける
+  if(newBizSpaceLevel >= 1){
+    const northLen = EAST_DOOR_Z_FROM - (BASE_MIN_Z-1);
+    if(northLen > 0) addBox(group, mat, BASE_MAX_X+1, 0.8, ((BASE_MIN_Z-1)+EAST_DOOR_Z_FROM)/2, 0.4, 1.6, northLen);
+    const southLen = DOOR_Z - EAST_DOOR_Z_TO;
+    if(southLen > 0) addBox(group, mat, BASE_MAX_X+1, 0.8, (EAST_DOOR_Z_TO+DOOR_Z)/2, 0.4, 1.6, southLen);
+  } else {
+    const baseEastZLen = DOOR_Z - (BASE_MIN_Z-1);
+    addBox(group, mat, BASE_MAX_X+1, 0.8, ((BASE_MIN_Z-1)+DOOR_Z)/2, 0.4, 1.6, baseEastZLen);
+  }
   const forestSideZLen = (FOREST_MAX_Z+1) - DOOR_Z;
   addBox(group, mat, FOREST_MAX_X+1, 0.8, (DOOR_Z+(FOREST_MAX_Z+1))/2, 0.4, 1.6, forestSideZLen);
   // 西: 上下1マスずつだけ壁を残し、それ以外の全長(COUNTER_Z_FROM〜COUNTER_Z_TO)はカウンター本体で塞ぐ
@@ -739,6 +804,100 @@ function setDoorSwing(door, p){
   if(!door) return;
   door.leftPivot.rotation.y = -p * Math.PI * 0.5;
   door.rightPivot.rotation.y = p * Math.PI * 0.5;
+}
+// 東の門(観音開き)。buildDoorPairと同じ仕組みだが、壁の向きが90度違うため隙間・パネルの伸びる
+// 向きがx方向ではなくz方向になる。戻り値のキー名(leftPivot/rightPivot)はあえて揃えてあり、
+// setDoorSwing()をそのまま使い回せる
+function buildEastDoorPair(group){
+  const mat = new THREE.MeshStandardMaterial({ color:0x6b4a2b });
+  const halfW = (EAST_DOOR_Z_TO - EAST_DOOR_Z_FROM) / 2;
+  const nearPivot = new THREE.Group(); nearPivot.position.set(EAST_DOOR_X, 0, EAST_DOOR_Z_FROM);
+  const nearPanel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.7, halfW), mat);
+  nearPanel.position.set(0, 0.95, halfW/2);
+  nearPivot.add(nearPanel);
+  const farPivot = new THREE.Group(); farPivot.position.set(EAST_DOOR_X, 0, EAST_DOOR_Z_TO);
+  const farPanel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.7, halfW), mat);
+  farPanel.position.set(0, 0.95, -halfW/2);
+  farPivot.add(farPanel);
+  group.add(nearPivot, farPivot);
+  return { leftPivot: nearPivot, rightPivot: farPivot };
+}
+// 狩猟エリア(新規事業: 肉の販売)の地面。拠点拡張の影響を受けない固定ゾーンなので、
+// 拠点のstaticGroupとは別に、事業スペース購入時に一度だけ構築してworld.huntGroupに保持する
+function buildHuntGround(group){
+  const cx = (HUNT_MIN_X + HUNT_MAX_X) / 2, cz = (HUNT_MIN_Z + HUNT_MAX_Z) / 2;
+  const width = (HUNT_MAX_X - HUNT_MIN_X + 1) + 1, depth = (HUNT_MAX_Z - HUNT_MIN_Z + 1) + 1;
+  addBox(group, new THREE.MeshStandardMaterial({color:0x7a8a4a}), cx, -0.1, cz, width, 0.2, depth); // 狩猟エリアの地面(枯れ草色)
+}
+// 狩猟エリアの柵(北・東・南の3面のみ。西側=拠点との境は東の門(buildFence側)が兼ねるため作らない)
+function buildHuntFence(group){
+  const mat = new THREE.MeshStandardMaterial({ color:0x8a6b3f });
+  const postMat = new THREE.MeshStandardMaterial({ color:0x5a4128 });
+  const width = (HUNT_MAX_X - HUNT_MIN_X + 1);
+  const depth = (HUNT_MAX_Z - HUNT_MIN_Z + 1);
+  const cx = (HUNT_MIN_X + HUNT_MAX_X) / 2, cz = (HUNT_MIN_Z + HUNT_MAX_Z) / 2;
+  addBox(group, mat, cx, 0.8, HUNT_MIN_Z-1, width, 1.6, 0.4); // 北
+  addBox(group, mat, cx, 0.8, HUNT_MAX_Z+1, width, 1.6, 0.4); // 南
+  addBox(group, mat, HUNT_MAX_X+1, 0.8, cz, 0.4, 1.6, depth); // 東
+  addBox(group, postMat, EAST_DOOR_X, 1.1, EAST_DOOR_Z_FROM, 0.3, 2.2, 0.3); // 門柱
+  addBox(group, postMat, EAST_DOOR_X, 1.1, EAST_DOOR_Z_TO, 0.3, 2.2, 0.3);
+}
+// 獲物(鹿)。低ポリ風の簡素な造形(胴体+頭+脚4本)。狩猟済みのあいだはmesh.visible=falseで丸ごと隠す
+function buildAnimalMesh(a){
+  const g = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color:0x9c7a52 });
+  const legMat = new THREE.MeshStandardMaterial({ color:0x6b5438 });
+  const legOffsets = [[-0.18,0.35],[0.18,0.35],[-0.18,-0.35],[0.18,-0.35]];
+  for(const [lx,lz] of legOffsets){
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,0.4,6), legMat);
+    leg.position.set(lx, 0.2, lz);
+    g.add(leg);
+  }
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.4,0.9), bodyMat);
+  body.position.y = 0.45;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.28,0.28,0.32), bodyMat);
+  head.position.set(0, 0.6, 0.55);
+  g.add(body, head);
+  g.position.set(a.x, 0, a.z);
+  return g;
+}
+function setAnimalVisual(a){
+  if(a.mesh) a.mesh.visible = (a.state === "animal");
+}
+// 猟師(狩猟自動化)。伐採マシンと同じく、担当の獲物のそばで作業中だけ表示するエフェクトを付ける
+function buildAutomationHuntMesh(){
+  const g = buildWorkerMesh(0x5a6b3f); // 迷彩系の緑=猟師
+  const chip = new THREE.Mesh(new THREE.ConeGeometry(0.09,0.16,5), new THREE.MeshStandardMaterial({color:0xc9a23f}));
+  chip.name = "effect";
+  chip.position.set(0.3, 1.2, 0);
+  chip.visible = false;
+  g.add(chip);
+  g.position.set(AUTO_HUNT_PT.x, 0, AUTO_HUNT_PT.z);
+  return g;
+}
+// 事業スペース(狩猟エリア)の表示を、state.newBusiness.spaceLevelに合わせて同期する。
+// 地面・柵・門・獲物・販売カウンターをまとめてworld.huntGroupとして一度だけ構築する
+// (HUNT_MIN/MAX_X/Zはどれも固定定数のため、拠点拡張のような再構築は不要)
+function syncNewBizZone(){
+  if(!world) return;
+  const active = state.newBusiness.spaceLevel >= 1;
+  if(active && !world.huntGroup){
+    const g = new THREE.Group();
+    buildHuntGround(g);
+    buildHuntFence(g);
+    world.eastDoor = buildEastDoorPair(g);
+    const sellMark = buildStaticMarkSprite("🥩");
+    sellMark.position.set(MEAT_SELL_PT.x, 1.0, MEAT_SELL_PT.z);
+    g.add(sellMark);
+    for(const a of animals){ a.mesh = buildAnimalMesh(a); setAnimalVisual(a); g.add(a.mesh); }
+    world.group.add(g);
+    world.huntGroup = g;
+  } else if(!active && world.huntGroup){
+    // 現状、購入後にレベルを戻す手段はないが(データリセット等で)spaceLevelが0に戻る場合に備えて対称に書く
+    world.group.remove(world.huntGroup);
+    world.huntGroup = null;
+    world.eastDoor = null;
+  }
 }
 // 雇用NPC(伐採・売買)の簡素なパーツ構成。色で種別を区別する
 function buildWorkerMesh(color){
@@ -1081,6 +1240,12 @@ function updateWoodPile(){
   world.pileLogs.forEach((mesh,i)=>{ mesh.visible = i < count; });
   if(world.depositMark) updateDepositMarkSprite(world.depositMark);
 }
+// 新規事業タブの肉の在庫表示を更新する(DOMノードは作り直さず、textContentだけ更新する軽量な更新。
+// updateWoodPileと同じ理由——毎フレームのように呼ばれうるため、フル再描画は避ける)
+function updateMeatDisplay(){
+  const el = document.getElementById("bizMeatStock");
+  if(el) el.textContent = `🥩 現在の肉: ${fmt(state.resources.meat)}`;
+}
 // 雇用NPC(伐採・売買)の見た目をstate.harvestWorkers/state.sellWorkersと同期させる
 // (雇用/失効のたびに呼び出す。個体数は少ないので毎回作り直す簡易実装)
 function syncWorkerMeshes(){
@@ -1182,6 +1347,21 @@ function syncAutomationMeshes(){
   }
   syncTradeLanes();
   syncTransportBelt();
+  syncHuntingMeshes();
+}
+// 狩猟自動化の人数(countLevel)に合わせて、猟師のメッシュを同期する(伐採マシンと同じ考え方)
+function syncHuntingMeshes(){
+  if(!world) return;
+  const hunters = state.automation.hunting.hunters;
+  if(!world.autoHuntMeshes) world.autoHuntMeshes = [];
+  while(world.autoHuntMeshes.length < hunters.length){
+    const m = buildAutomationHuntMesh();
+    world.group.add(m);
+    world.autoHuntMeshes.push(m);
+  }
+  while(world.autoHuntMeshes.length > hunters.length){
+    world.group.remove(world.autoHuntMeshes.pop());
+  }
 }
 // 売買自動化のレベル(=開放されたレーン数)に合わせて、レーン1以降の常駐NPC・客NPCの列を同期する
 // (レーン0=プレイヤー用は別枠で常時有効なのでここでは扱わない)
@@ -1219,6 +1399,63 @@ function updateAutomationVisuals(now){
       eff.visible = !!m.arrived;
       if(m.arrived){
         eff.position.y = 1.0 + Math.sin(now/150)*0.08;
+        eff.rotation.y = now/300;
+      }
+    }
+  });
+}
+
+// --- 狩猟自動化(新規事業: 肉の販売)の獲物への移動・割り当て ---------------------
+// 伐採マシン(assignMachineTree等)と全く同じ考え方。獲物にも配置順の番号がある
+function nextAvailableAnimalIdx(fromIdx){
+  const n = animals.length;
+  if(n === 0) return null;
+  const used = new Set(state.automation.hunting.hunters.filter(h=>h.animalIdx!=null).map(h=>h.animalIdx));
+  for(let step=0; step<n; step++){
+    const idx = (fromIdx + step) % n;
+    if(animals[idx].state === "animal" && !used.has(idx)) return idx;
+  }
+  return null; // 空いている獲物が無い
+}
+function assignHunterAnimal(h, fromIdx){
+  h.animalIdx = nextAvailableAnimalIdx(fromIdx);
+  h.progress = 0;
+  h.arrived = false;
+}
+function ensureHunterTarget(h){
+  if(!h.pos) h.pos = { x: AUTO_HUNT_PT.x, z: AUTO_HUNT_PT.z };
+  if(h.animalIdx != null && animals[h.animalIdx] && animals[h.animalIdx].state === "animal") return;
+  assignHunterAnimal(h, h.animalIdx != null ? h.animalIdx : 0);
+}
+// 猟師(人数ぶん)を1マスずつ担当の獲物へ歩かせる(毎フレーム呼び出す。伐採マシンの歩行と同じ方式)
+function updateHuntingWalk(dt){
+  for(const h of state.automation.hunting.hunters){
+    ensureHunterTarget(h);
+    if(h.animalIdx == null) continue; // 空いている獲物が無い
+    const a = animals[h.animalIdx];
+    if(h.pos.x === a.x && h.pos.z === a.z){ h.arrived = true; continue; }
+    h.arrived = false;
+    h.stepTimer = (h.stepTimer||0) - dt;
+    if(h.stepTimer <= 0){
+      if(h.pos.x !== a.x) h.pos.x += Math.sign(a.x - h.pos.x);
+      else if(h.pos.z !== a.z) h.pos.z += Math.sign(a.z - h.pos.z);
+      h.stepTimer = WORKER_STEP_DURATION;
+    }
+  }
+}
+// 猟師(人数ぶん)の位置・狩猟エフェクトの見た目を毎フレーム更新する(伐採マシンと同じ方式)
+function updateHuntingVisuals(now){
+  if(!world || !world.autoHuntMeshes) return;
+  state.automation.hunting.hunters.forEach((h,i)=>{
+    const mesh = world.autoHuntMeshes[i];
+    if(!mesh) return;
+    const pos = h.pos || AUTO_HUNT_PT;
+    mesh.position.set(pos.x, 0, pos.z);
+    const eff = mesh.getObjectByName("effect");
+    if(eff){
+      eff.visible = !!h.arrived;
+      if(h.arrived){
+        eff.position.y = 1.2 + Math.sin(now/150)*0.08;
         eff.rotation.y = now/300;
       }
     }
@@ -1383,6 +1620,7 @@ function initScene(){
   syncWorkerMeshes();
   syncAutomationMeshes();
   syncTransportBelt();
+  syncNewBizZone(); // 既存セーブでspaceLevel>=1なら、狩猟エリアをここで構築する
   requestAnimationFrame(animate);
 }
 // 地面・柵・木材売買カウンター(本体・天板・丸太の山)・置き場/売買マークを構築し、worldに登録する。
@@ -1448,6 +1686,17 @@ function updateDoorSwing(dt){
   if(doorSwing < target) doorSwing = Math.min(target, doorSwing+rate);
   else if(doorSwing > target) doorSwing = Math.max(target, doorSwing-rate);
   setDoorSwing(world.door, doorSwing);
+}
+// 東の門(新規事業スペース)の開閉演出。updateDoorSwingと同じ考え方
+function updateEastDoorSwing(dt){
+  if(!world || !world.eastDoor) return;
+  const p = state.player;
+  const near = Math.abs(p.x - EAST_DOOR_X) <= 1.5 && p.z >= EAST_DOOR_Z_FROM-1.5 && p.z <= EAST_DOOR_Z_TO+1.5;
+  const target = near ? 1 : 0;
+  const rate = dt/0.3;
+  if(eastDoorSwing < target) eastDoorSwing = Math.min(target, eastDoorSwing+rate);
+  else if(eastDoorSwing > target) eastDoorSwing = Math.max(target, eastDoorSwing-rate);
+  setDoorSwing(world.eastDoor, eastDoorSwing);
 }
 
 // --- 移動(1マスずつ) --------------------------------------------------
@@ -1570,6 +1819,20 @@ function updateInteractions(dt){
     showCollectMsg(`+${Math.floor(take)}🪙`);
   }
 
+  // 新規事業: 肉販売カウンター(狩猟エリア)。客NPCは置かず、近づいている間だけ肉が自動で売れる
+  if(state.newBusiness.spaceLevel >= 1 && state.resources.meat > 1e-9 &&
+     distTo(MEAT_SELL_PT.x,MEAT_SELL_PT.z,p.x,p.z) <= INTERACT_RADIUS){
+    const sellAmt = Math.min(MEAT_SELL_RATE_PER_SEC*dt, state.resources.meat);
+    if(sellAmt > 1e-9){
+      state.resources.meat -= sellAmt;
+      const earned = sellAmt * MEAT_PRICE;
+      state.resources.gold += earned;
+      renderResBar(); updateMeatDisplay(); save();
+      showAction(`🥩 肉を販売中… 🪙+${earned.toFixed(1)}`);
+    }
+    actionShown = true;
+  }
+
   if(!actionShown) hideAction();
 }
 
@@ -1679,21 +1942,23 @@ function processHiredWorkers(now){
   if(changed){ renderResBar(); updateWoodPile(); syncWorkerMeshes(); save(); }
 }
 
-// --- 全自動化の導入・レベルアップ(効率化タブ) ----------------------------
-// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC) | "transport"(木材自動運搬)。
+// --- 全自動化の導入・レベルアップ(効率化タブ・新規事業タブ共通) --------------
+// kind: "harvest"(伐採マシン) | "trade"(常駐売買NPC) | "transport"(木材自動運搬) | "hunting"(猟師)。
 // track: "count"(台数/人数/本数) | "speed"(効率)。
 // countはLv.0→1が導入、以降はレベルアップ。speedはcountLevelが1以上でないと購入できない
-// (稼働数が0のうちは効率を上げても意味がないため)
+// (稼働数が0のうちは効率を上げても意味がないため)。harvest/trade/transportは効率化タブ、
+// huntingは新規事業タブに表示されるため、購入後にどちらのフル再描画を呼ぶかをkindで切り替える
 function buyAutomation(kind, track){
   const a = state.automation[kind];
-  const label = kind==="harvest" ? "伐採マシン" : kind==="trade" ? "常駐売買NPC" : "木材自動運搬(本数)";
+  const label = kind==="harvest" ? "伐採マシン" : kind==="trade" ? "常駐売買NPC" : kind==="transport" ? "木材自動運搬(本数)" : "狩猟自動化(人数)";
+  const refreshList = ()=>{ if(kind === "hunting") renderNewBizList(); else renderEffList(); };
   if(track === "count"){
     if(a.countLevel >= AUTOMATION_MAX) return;
     if(kind === "trade" && (1 + a.countLevel + 1) > maxTradeLanesFit()){
       toast("拠点拡張が必要(客NPCの列を置く余地がない)");
       return;
     }
-    const cost = kind === "transport" ? transportCountCost() : automationCountCost(kind);
+    const cost = kind === "transport" ? transportCountCost() : kind === "hunting" ? huntingCountCost() : automationCountCost(kind);
     if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
     state.resources.gold -= cost;
     const wasZero = a.countLevel === 0;
@@ -1703,28 +1968,37 @@ function buyAutomation(kind, track){
       const m = { treeIdx:null, pos:null, progress:0, arrived:false, stepTimer:0 };
       assignMachineTree(m, 0);
       a.machines.push(m);
+    } else if(kind === "hunting"){
+      // 猟師も伐採マシンと同じく、人数レベルアップのたびに1人増える
+      const h = { animalIdx:null, pos:null, progress:0, arrived:false, stepTimer:0 };
+      assignHunterAnimal(h, 0);
+      a.hunters.push(h);
     }
-    syncAutomationMeshes(); // 内部でsyncTransportBelt()も呼ぶため、transportのコンベア表示もここで同期される
-    renderResBar(); renderEffList(); save();
+    syncAutomationMeshes(); // 内部でsyncTransportBelt()/syncHuntingMeshes()も呼ぶため、ここで表示も同期される
+    renderResBar(); refreshList(); save();
     if(wasZero){
-      toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : kind==="trade" ? "⚙️ 売買NPCをカウンターに常駐させた!" : "⚙️ 木材自動運搬用のベルトコンベアを設置した!");
+      toast(kind==="harvest" ? "⚙️ 伐採マシンを森に設置した!" : kind==="trade" ? "⚙️ 売買NPCをカウンターに常駐させた!" : kind==="transport" ? "⚙️ 木材自動運搬用のベルトコンベアを設置した!" : "⚙️ 猟師を狩猟エリアに配置した!");
     } else if(kind === "harvest"){
       toast(`⚙️ 伐採マシンを増設した!(計${a.countLevel}台)`);
     } else if(kind === "trade"){
       toast(`⚙️ 常駐売買NPCを増員した!(計${a.countLevel}体・客NPCの列も増設)`);
-    } else {
+    } else if(kind === "transport"){
       toast(`⚙️ コンベアを増設した!(計${a.countLevel}本)`);
+    } else {
+      toast(`⚙️ 猟師を増員した!(計${a.countLevel}人)`);
     }
   } else { // track === "speed"
     if(a.countLevel <= 0){ toast(`先に${label}を導入してください`); return; }
     if(a.speedLevel >= AUTOMATION_MAX) return;
-    const cost = kind === "transport" ? transportSpeedCost() : automationEfficiencyCost(kind);
+    const cost = kind === "transport" ? transportSpeedCost() : kind === "hunting" ? huntingEfficiencyCost() : automationEfficiencyCost(kind);
     if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
     state.resources.gold -= cost;
     a.speedLevel += 1;
-    renderResBar(); renderEffList(); save();
+    renderResBar(); refreshList(); save();
     if(kind === "transport"){
       toast(`⚡ コンベアの運搬効率をLv.${a.speedLevel}(1本あたり${transportRateForLevel(a.speedLevel)}個/秒)に強化した!`);
+    } else if(kind === "hunting"){
+      toast(`⚡ 猟師の効率をLv.${a.speedLevel}に強化した!`);
     } else {
       toast(`⚡ ${kind==="harvest"?"伐採マシン":"常駐売買NPC"}の効率をLv.${a.speedLevel}に強化した!`);
     }
@@ -1743,6 +2017,20 @@ function buyBaseExpansion(){
   rebuildTransportBelt(); // ベルトコンベアの終点(カウンター側)も拠点拡張で動くため作り直す
   renderResBar(); renderEffList(); save();
   toast(`🏗️ 拠点を北へ${BASE_EXPANSION_STEP}マス拡張した!(計${state.baseExpansion.level}回)`);
+}
+// 事業スペース拡張(新規事業タブ)。購入のたびに拠点の東に新規事業用のスペースが1つ解放される
+// (Lv.1=肉の販売/狩猟。将来、魚・小麦などを追加する際もこのレベルを使い回す想定)
+function buyNewBizSpace(){
+  if(state.newBusiness.spaceLevel >= NEWBIZ_SPACE_MAX) return;
+  const cost = newBizSpaceCost();
+  if(state.resources.gold < cost){ toast("ゴールドが足りない"); return; }
+  state.resources.gold -= cost;
+  state.newBusiness.spaceLevel += 1;
+  syncNewBizSpaceLevel(state);
+  rebuildStaticGeometry(); // 拠点の東壁に東の門の隙間を開ける
+  syncNewBizZone();        // 狩猟エリアの地面・柵・門・獲物・販売カウンターを構築する
+  renderResBar(); renderNewBizList(); save();
+  toast(`🏗️ 新規事業スペースを拡張した!(計${state.newBusiness.spaceLevel}回)`);
 }
 // 現実時間ベースで進む(拠点にいない間・オフラインの間も進む。processHiredWorkersと同じ方式)
 function processAutomation(now){
@@ -1834,6 +2122,45 @@ function processTransport(now){
     renderResBar(); updateWoodPile(); save();
   }
 }
+// 狩猟自動化(新規事業: 肉の販売): 現実時間ベースで進む(他の自動化と同じ方式)。専用の収集ボックスは
+// 持たず、獲物を仕留めるたびに直接state.resources.meatへ加算する
+function processHunting(now){
+  const last = state.huntingLastTick || now;
+  const elapsedSec = Math.max(0, (now-last)/1000);
+  state.huntingLastTick = now;
+  if(elapsedSec <= 0) return;
+  const hunting = state.automation.hunting;
+  if(hunting.countLevel <= 0) return;
+  let changed = false;
+  const need = huntingSecondsFor(hunting.speedLevel);
+  for(const h of hunting.hunters){
+    ensureHunterTarget(h);
+    // 長時間放置していた場合(オフライン等)は、歩いている途中でも到着済みとみなす(他の自動化と同じ救済策)
+    if(h.animalIdx != null && !h.arrived && elapsedSec > 1){
+      const a = animals[h.animalIdx];
+      h.pos = { x: a.x, z: a.z };
+      h.arrived = true;
+    }
+    if(h.animalIdx != null && h.arrived){
+      h.progress = (h.progress||0) + elapsedSec;
+      if(h.progress >= need){
+        const completedIdx = h.animalIdx;
+        const a = animals[completedIdx];
+        a.state = "gone"; a.progress = 0; a.goneUntil = Date.now() + ANIMAL_RESPAWN_SECONDS*1000;
+        setAnimalVisual(a);
+        state.resources.meat += MEAT_PER_ANIMAL;
+        assignHunterAnimal(h, (completedIdx+1) % animals.length); // 次の番号の獲物へ(最後まで行ったら1番から)
+        changed = true;
+      }
+    }
+  }
+  // 獲物の再生(木のregrowと同じ方式)
+  const nowMs = Date.now();
+  for(const a of animals){
+    if(a.state === "gone" && nowMs >= a.goneUntil){ a.state = "animal"; setAnimalVisual(a); }
+  }
+  if(changed){ renderResBar(); updateMeatDisplay(); save(); }
+}
 
 function showAction(text){
   const el = document.getElementById("hudAction");
@@ -1842,9 +2169,10 @@ function showAction(text){
 }
 function hideAction(){ document.getElementById("hudAction").classList.remove("show"); }
 function currentZoneLabel(){
-  const z = state.player.z;
-  if(z <= BASE_MAX_Z) return "🏕️ 拠点";
-  if(z === DOOR_Z) return "🚪 扉";
+  const p = state.player;
+  if(p.x > BASE_MAX_X) return "🥩 狩猟エリア"; // 東の門・狩猟エリア(事業スペース解放後のみ到達できる)
+  if(p.z <= BASE_MAX_Z) return "🏕️ 拠点";
+  if(p.z === DOOR_Z) return "🚪 扉";
   return "🌲 森";
 }
 function updateHud(){
@@ -1894,16 +2222,20 @@ function animate(ts){
     attemptStep(heldDir);
   }
   updateDoorSwing(dt);
+  updateEastDoorSwing(dt);
   updateHarvestWorkersWalk(dt);
   updateHarvestWorkerVisuals();
   updateAutomationHarvestWalk(dt);
+  updateHuntingWalk(dt);
   updateExitingNpcs(dt);
   processHiredWorkers(Date.now());
   processTransport(Date.now()); // 自動運搬(boxWood→resources.wood)を先に進め、同じフレーム内で売買自動化がその木材を使えるようにする
   processAutomation(Date.now());
+  processHunting(Date.now());
   updateInteractions(dt); // harvestingTreeIdx(手動伐採中の木)をこのフレーム分で確定させてから、葉エフェクトの表示判定に使う
   updateTreeLeafEffects(ts);
   updateAutomationVisuals(ts);
+  updateHuntingVisuals(ts);
   updateTransportBeltVisual(ts);
   updateHud();
   updateStatBar();
@@ -1944,6 +2276,7 @@ function renderResBar(){
   document.getElementById("statGold").textContent = `🪙 ${fmt(state.resources.gold)}`;
   refreshEffButtons();
   refreshHireButtons();
+  refreshNewBizButtons();
 }
 // data-cost属性を持つボタン(=ゴールド不足以外の理由では無効化されていないボタン)だけを対象に、
 // 現在の所持ゴールドと比較してdisabled属性を更新する。DOMノードは作り直さない
@@ -1957,46 +2290,66 @@ function refreshHireButtons(){
     btn.disabled = state.resources.gold < Number(btn.getAttribute("data-cost"));
   });
 }
-
-function renderMarket(){
-  const wrap = document.getElementById("marketArea");
-  wrap.innerHTML = `
-    <div class="mcard">
-      <div class="mcard-head"><span class="ic">🪵</span><span class="t">木材を売買</span>
-        <span class="rate">売${MARKET_RATES.wood.sell}/買${MARKET_RATES.wood.buy} 🪙</span></div>
-      <div class="sub-label">売る</div>
-      <div class="trade-btns">
-        <button class="btn btn-sub" data-sell="wood" data-amt="10">10個</button>
-        <button class="btn btn-sub" data-sell="wood" data-amt="50">50個</button>
-        <button class="btn btn-sub" data-sell="wood" data-amt="99999">全部</button>
-      </div>
-      <div class="sub-label">買う</div>
-      <div class="trade-btns">
-        <button class="btn btn-sub" data-buy="wood" data-amt="10">10個</button>
-        <button class="btn btn-sub" data-buy="wood" data-amt="50">50個</button>
-      </div>
-    </div>
-    <div class="mcard">
-      <div class="mcard-head"><span class="ic">🍖</span><span class="t">食料を売買</span>
-        <span class="rate">売${MARKET_RATES.food.sell}/買${MARKET_RATES.food.buy} 🪙</span></div>
-      <div class="sub-label">売る</div>
-      <div class="trade-btns">
-        <button class="btn btn-sub" data-sell="food" data-amt="10">10個</button>
-        <button class="btn btn-sub" data-sell="food" data-amt="50">50個</button>
-        <button class="btn btn-sub" data-sell="food" data-amt="99999">全部</button>
-      </div>
-      <div class="sub-label">買う</div>
-      <div class="trade-btns">
-        <button class="btn btn-sub" data-buy="food" data-amt="10">10個</button>
-        <button class="btn btn-sub" data-buy="food" data-amt="50">50個</button>
-      </div>
-    </div>
-  `;
-  wrap.querySelectorAll("[data-sell]").forEach(btn=>{
-    btn.addEventListener("click", ()=> sell(btn.getAttribute("data-sell"), parseInt(btn.getAttribute("data-amt"),10)));
+function refreshNewBizButtons(){
+  document.querySelectorAll("#newBizList button[data-cost]").forEach(btn=>{
+    btn.disabled = state.resources.gold < Number(btn.getAttribute("data-cost"));
   });
-  wrap.querySelectorAll("[data-buy]").forEach(btn=>{
-    btn.addEventListener("click", ()=> buy(btn.getAttribute("data-buy"), parseInt(btn.getAttribute("data-amt"),10)));
+}
+
+// --- 新規事業タブ(事業スペース拡張+各新規事業の自動化) -------------------------
+// 新規事業ごとのAUTOMATION_DEFS相当。automationRow()は既にdef.kind/trackで汎用化されているため、
+// 効率化タブのAUTOMATION_DEFSとは別の辞書を用意して使い回す(将来、魚・小麦などを追加する際もここに足す)
+const NEWBIZ_DEFS = {
+  huntingCount: { name:"狩猟自動化(人数)", icon:"⚙️🥩", kind:"hunting", track:"count", place:"猟師を狩猟エリアに配置" },
+  huntingSpeed: { name:"狩猟自動化(効率)", icon:"⚡🥩", kind:"hunting", track:"speed" }
+};
+function renderNewBizList(){
+  const wrap = document.getElementById("newBizList");
+  updateMeatDisplay();
+  let html = "";
+  // 事業スペース拡張(各新規事業とは別枠、専用の購入関数を使う。これを購入するまで各事業は解放されない)
+  {
+    const lv = state.newBusiness.spaceLevel;
+    const atCap = lv >= NEWBIZ_SPACE_MAX;
+    const cost = atCap ? null : newBizSpaceCost();
+    const descLine = lv===0
+      ? "拠点の東に新規事業用のスペースを拡張する。解放すると肉の販売(狩猟)が行えるようになる"
+      : `これまでに${lv}回拡張`;
+    html += `<div class="eff-row">
+      <div class="eff-info">
+        <div class="name">🏗️ 事業スペース拡張${lv>0?` (${lv}回目)`:""}</div>
+        <div class="lv">${descLine}</div>
+      </div>
+      ${atCap
+        ? `<button class="btn btn-sub" disabled>MAX</button>`
+        : `<button class="btn btn-sub" data-newbiz-expand="1" data-cost="${cost}" ${state.resources.gold<cost?"disabled":""}>${lv===0?"拡張":`${lv+1}回目へ`} 🪙${cost}</button>`}
+    </div>`;
+  }
+  if(state.newBusiness.spaceLevel >= 1){
+    Object.keys(NEWBIZ_DEFS).forEach((key)=>{
+      const r = automationRow(key, NEWBIZ_DEFS[key]);
+      html += `<div class="eff-row">
+        <div class="eff-info">
+          <div class="name">${r.name}</div>
+          <div class="lv">${r.descLine}</div>
+        </div>
+        ${r.atCap
+          ? `<button class="btn btn-sub" disabled>MAX</button>`
+          : r.disabled
+            ? `<button class="btn btn-sub" disabled>${r.btnLabel} 🪙${r.cost}</button>`
+            : `<button class="btn btn-sub" ${r.dataAttr} data-cost="${r.cost}" ${state.resources.gold<r.cost?"disabled":""}>${r.btnLabel} 🪙${r.cost}</button>`}
+      </div>`;
+    });
+  } else {
+    html += `<div class="locked-note">事業スペースを拡張すると、ここに新規事業(肉の販売など)が追加されます</div>`;
+  }
+  wrap.innerHTML = html;
+  wrap.querySelectorAll("[data-newbiz-expand]").forEach(btn=>{
+    btn.addEventListener("click", ()=> buyNewBizSpace());
+  });
+  wrap.querySelectorAll("[data-auto]").forEach(btn=>{
+    const def = NEWBIZ_DEFS[btn.getAttribute("data-auto")];
+    btn.addEventListener("click", ()=> buyAutomation(def.kind, def.track));
   });
 }
 
@@ -2017,13 +2370,18 @@ function automationRow(key, def){
     const lv = a.countLevel;
     const atCap = lv >= AUTOMATION_MAX;
     const needsExpansion = def.kind==="trade" && !atCap && (1 + lv + 1) > maxTradeLanesFit();
-    const cost = atCap ? null : (def.kind==="transport" ? transportCountCost() : automationCountCost(def.kind));
+    const cost = atCap ? null : (def.kind==="transport" ? transportCountCost() : def.kind==="hunting" ? huntingCountCost() : automationCountCost(def.kind));
     let descLine;
     if(def.kind === "transport"){
       // 木材自動運搬はharvest/tradeと違い専用の収集ボックスを持たない(boxWood→resources.woodへ直接運ぶため)
       descLine = lv===0
         ? "導入すると木材収集ボックス→カウンターへベルトコンベアが自動で木材を運ぶ"
         : `稼働中 ${lv}本${atCap?"":` → 次Lv ${lv+1}本`}`;
+    } else if(def.kind === "hunting"){
+      // 狩猟自動化もtransportと同じく専用の収集ボックスを持たない(獲物を仕留めたら直接resources.meatへ)
+      descLine = lv===0
+        ? `${def.place}。獲物を仕留めるたびに肉として直接蓄えられる`
+        : `稼働中 ${lv}人${atCap?"":` → 次Lv ${lv+1}人`}`;
     } else {
       const box = def.kind==="harvest" ? state.automation.harvest.boxWood : state.automation.trade.boxGold;
       const boxIcon = def.kind==="harvest" ? "🪵" : "🪙";
@@ -2043,10 +2401,10 @@ function automationRow(key, def){
     const lv = a.speedLevel;
     const atCap = lv >= AUTOMATION_MAX;
     const locked = a.countLevel <= 0; // 台数0のうちは効率を上げる意味がないため購入不可
-    const cost = atCap ? null : (def.kind==="transport" ? transportSpeedCost() : automationEfficiencyCost(def.kind));
+    const cost = atCap ? null : (def.kind==="transport" ? transportSpeedCost() : def.kind==="hunting" ? huntingEfficiencyCost() : automationEfficiencyCost(def.kind));
     let descLine;
     if(locked){
-      const lockedLabel = def.kind==="harvest" ? "伐採自動化(台数)" : def.kind==="trade" ? "売買自動化(人数)" : "木材自動運搬(本数)";
+      const lockedLabel = def.kind==="harvest" ? "伐採自動化(台数)" : def.kind==="trade" ? "売買自動化(人数)" : def.kind==="transport" ? "木材自動運搬(本数)" : "狩猟自動化(人数)";
       descLine = `先に${lockedLabel}を導入してください`;
     } else if(def.kind==="harvest"){
       const cur = automationHarvestSecondsFor(lv).toFixed(1);
@@ -2056,10 +2414,14 @@ function automationRow(key, def){
       const cur = automationSellRateFor(lv).toFixed(1);
       const next = atCap ? null : automationSellRateFor(lv+1).toFixed(1);
       descLine = `1体あたり${cur}個/秒${atCap?"":` → 次Lv ${next}個/秒`}`;
-    } else {
+    } else if(def.kind==="transport"){
       const cur = transportRateForLevel(lv);
       const next = atCap ? null : transportRateForLevel(lv+1);
       descLine = `1本あたり${cur}個/秒${atCap?"":` → 次Lv ${next}個/秒`}`;
+    } else {
+      const cur = huntingSecondsFor(lv).toFixed(1);
+      const next = atCap ? null : huntingSecondsFor(lv+1).toFixed(1);
+      descLine = `1人あたり獲物1頭を${cur}秒で狩猟${atCap?"":` → 次Lv ${next}秒`}`;
     }
     const btnLabel = `Lv.${lv+1}へ`;
     return { name:`${def.icon} ${def.name}${lv>0?` Lv.${lv}`:""}`, descLine,
@@ -2172,9 +2534,9 @@ function renderNpcHireList(){
 
 function render(){
   renderResBar();
-  renderMarket();
   renderEffList();
   renderNpcHireList();
+  renderNewBizList();
 }
 
 /* =========================================================
@@ -2247,7 +2609,9 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     localStorage.removeItem(SAVE_KEY);
     state = defaultState();
     recomputeBaseLayout(state);
+    syncNewBizSpaceLevel(state);
     trees.forEach(t=>{ t.state="tree"; t.progress=0; t.stumpUntil=0; setTreeVisual(t); });
+    animals.forEach(a=>{ a.state="animal"; a.progress=0; a.goneUntil=0; setAnimalVisual(a); });
     harvestingTreeIdx = -1;
     stepping = false;
     if(world) npcQueues.forEach(q=> q.forEach(npc=> world.group.remove(npc.mesh)));
@@ -2256,13 +2620,17 @@ document.getElementById("btnReset").addEventListener("click", ()=>{
     exitingNpcs = [];
     ensureQueueFilled(0);
     doorSwing = 0;
+    eastDoorSwing = 0;
     if(world) setDoorSwing(world.door, 0);
+    if(world) setDoorSwing(world.eastDoor, 0);
     document.getElementById("settingsModal").hidden = true;
     rebuildStaticGeometry();
     repositionAllTradeLanes();
+    syncNewBizZone(); // spaceLevelが0に戻るため、既存の狩猟エリアがあれば取り壊す
     render();
     updatePlayerMesh();
     updateWoodPile();
+    updateMeatDisplay();
     syncWorkerMeshes();
     syncAutomationMeshes();
     syncTransportBelt();
@@ -2278,6 +2646,7 @@ document.getElementById("verNum").textContent =
    ========================================================= */
 state = load();
 recomputeBaseLayout(state); // 新規プレイ(defaultState()経由)の場合もここで確定させる(loadは既存セーブ時のみ内部で呼ぶ)
+syncNewBizSpaceLevel(state); // 同上(loadは既存セーブ時のみ内部で呼ぶため、新規プレイの場合もここで確定させる)
 render();
 initScene();
 save();
